@@ -6,19 +6,23 @@
 <meta name="theme-color" content="#0e0f12">
 <title>Pedal Remote</title>
 <!--
-  Pedal Remote — edit the current preset on a ToneX One from a phone over USB.
+  Pedal Remote — edit presets on a ToneX One from a phone over USB.
 
   How it talks to the pedal:
-  - The ToneX One shows up as a USB serial device (CDC). On Android Chrome we use WebUSB;
-    on a laptop (Chrome/Edge) we use Web Serial.
+  - The ToneX One is a USB serial device (CDC). Inside the Android app the app does the USB work
+    (window.AndroidUsb); in Chrome on Android we use WebUSB; on a laptop (Chrome/Edge) Web Serial.
   - Messages are HDLC-framed (0x7E start/end, 0x7D escaping, CRC-16 at the end).
   - Protocol knowledge comes from the open-source TonexOneController project by Greg Smith
     (Apache 2.0) and vit3k/tonex_controller. https://github.com/Builty/TonexOneController
 
-  What this page sends to the pedal (and nothing else):
-  - "hello", "request state", "request preset details" (read-only requests)
-  - "set single parameter" (one knob/switch of the current preset at a time)
-  It never sends the pedal's global state block, so it can't overwrite slots, colours or globals.
+  What this page sends to the pedal:
+  - read requests: "hello", "request state", "request preset details"
+  - "set single parameter": one knob/switch of the current preset at a time
+  - "set state": ONLY when you pick another preset in the preset list. It sends back the pedal's own
+    state message exactly as received, with just the preset number in the active slot changed.
+
+  About saving: the ToneX One keeps every change automatically; there is no save command.
+  So "Save" here means "keep these changes", and "Undo changes" sends the last saved values back.
 -->
 <style>
   :root {
@@ -29,7 +33,6 @@
     --text: #eceef2;
     --muted: #8d93a0;
     --accent: #f5a524;
-    --accent-dim: #5a4520;
     --ok: #3ccf7a;
     --bad: #ff5d5d;
     --radius: 16px;
@@ -54,7 +57,7 @@
   .status.on .dot { background: var(--ok); }
   .status.busy .dot { background: var(--accent); }
 
-  button {
+  button, select {
     font: inherit; color: var(--text); background: var(--card-2);
     border: 1px solid var(--line); border-radius: 12px;
     min-height: 48px; padding: 0 16px; cursor: pointer;
@@ -62,6 +65,9 @@
   button:active { transform: scale(.98); }
   button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 700; }
   button:disabled { opacity: .4; }
+  select { width: 100%; appearance: none; -webkit-appearance: none; padding-right: 36px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 20px) 21px, calc(100% - 15px) 21px; background-size: 5px 5px; background-repeat: no-repeat; }
 
   .card {
     background: var(--card); border: 1px solid var(--line);
@@ -81,19 +87,22 @@
   /* Preset header */
   .preset { display: flex; align-items: center; gap: 14px; }
   .preset-num {
-    font-size: 28px; font-weight: 800; min-width: 56px; height: 56px;
-    display: grid; place-items: center; border-radius: 12px;
-    background: var(--card-2); border: 1px solid var(--line);
+    font-size: 26px; font-weight: 800; min-width: 64px; height: 64px; padding: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1;
+    border-radius: 14px; background: var(--card-2); border: 1px solid var(--line);
   }
+  .preset-num small { font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 4px; letter-spacing: .05em; }
+  .preset-title { flex: 1; min-width: 0; cursor: pointer; }
   .preset-name { font-size: 20px; font-weight: 700; line-height: 1.2; word-break: break-word; }
-  .preset-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
-  .preset-actions { display: flex; gap: 10px; margin-top: 14px; }
-  .preset-actions button { flex: 1; }
+  .dirty { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-left: 8px; vertical-align: middle; }
+  .preset-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+  .preset-actions { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; margin-top: 14px; }
+  .preset-actions button { padding: 0 8px; font-size: 15px; }
 
   /* Block on/off buttons */
-  .toggles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .toggles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .tog {
-    min-height: 64px; border-radius: 14px; font-weight: 700; font-size: 15px;
+    min-height: 60px; border-radius: 14px; font-weight: 700; font-size: 14px; padding: 0 4px;
     background: var(--card-2); color: var(--muted); border: 2px solid var(--line);
   }
   .tog.on { background: var(--accent); color: #1a1205; border-color: var(--accent); }
@@ -106,7 +115,6 @@
 
   /* Sliders */
   .param { padding: 10px 0; border-top: 1px solid var(--line); }
-  .param:first-of-type { border-top: 0; }
   .param-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .param-label { font-size: 15px; }
   .param-val { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
@@ -121,7 +129,10 @@
   input[type=range]::-moz-range-track { height: 8px; border-radius: 4px; background: var(--line); }
   input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); }
 
-  .block-off .param { opacity: .45; }
+  .row-switch { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line); }
+  .row-switch span { font-size: 15px; }
+
+  .block-off .param, .block-off .row-switch, .block-off .chips { opacity: .45; }
 
   details.adv { margin-top: 6px; }
   details.adv > summary {
@@ -132,16 +143,49 @@
   details.adv > summary::before { content: "▸ "; }
   details.adv[open] > summary::before { content: "▾ "; }
 
-  .models { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
-  .model { min-height: 44px; font-size: 14px; padding: 0 6px; }
-  .model.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .chip { min-height: 44px; font-size: 14px; padding: 0 6px; }
+  .chip.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .sub-label { font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
 
   /* Locked until a preset has been read */
   main.locked .editable { opacity: .35; pointer-events: none; }
 
+  /* Bottom sheet (preset list and questions) */
+  .sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+  .sheet {
+    background: var(--card); border: 1px solid var(--line); border-radius: 20px 20px 0 0;
+    width: 100%; max-width: 640px; max-height: 85vh; overflow: auto;
+    padding: 16px 16px calc(20px + env(safe-area-inset-bottom));
+  }
+  .sheet-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .sheet-head h3 { margin: 0; font-size: 18px; flex: 1; }
+  .sheet-head button { min-height: 40px; padding: 0 14px; }
+  .sheet p { color: var(--muted); font-size: 14px; line-height: 1.45; margin: 4px 0 12px; }
+  .preset-row {
+    display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
+    min-height: 56px; margin-bottom: 6px; padding: 0 14px;
+  }
+  .preset-row b { min-width: 28px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .preset-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preset-row em { font-style: normal; font-size: 12px; color: var(--accent); }
+  .preset-row.current { border-color: var(--accent); }
+  .choice-list { display: grid; gap: 8px; }
+
+  /* Notice that pops up at the bottom */
+  .notice {
+    position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 15;
+    max-width: 616px; margin: 0 auto;
+    background: #2a2110; border: 1px solid #6b4c17; border-radius: 14px; padding: 14px; line-height: 1.4;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  .notice.good { background: #12281b; border-color: #23573a; }
+  .notice-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .notice-actions button { flex: 1; min-height: 44px; }
+
   pre#log {
     white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.4;
-    color: var(--muted); max-height: 260px; overflow: auto; margin: 8px 0;
+    color: var(--muted); max-height: 300px; overflow: auto; margin: 8px 0;
   }
   .log-actions { display: flex; gap: 10px; }
   .log-actions button { flex: 1; min-height: 40px; font-size: 14px; }
@@ -156,12 +200,11 @@
 </header>
 
 <div class="banner warn hidden" id="noSupport">
-  This browser can't talk to USB devices. Open this page in <b>Chrome on Android</b>
-  (or Chrome/Edge on a laptop). iPhone/iPad Safari can't do it.
+  This browser can't talk to USB devices. Use the Pedal Remote Android app, or Chrome/Edge on a laptop.
 </div>
 
 <div class="banner info" id="connectHelp">
-  Plug the ToneX One into the phone with a USB-C cable, then tap <b>Connect</b> and pick the pedal.
+  Plug the ToneX One into the phone with a USB-C cable, then tap <b>Connect</b>.
   <div style="margin-top:12px"><button class="primary" id="connectBtn" style="width:100%">Connect</button></div>
 </div>
 
@@ -169,15 +212,16 @@
 
   <section class="card">
     <div class="preset">
-      <div class="preset-num" id="presetNum">–</div>
-      <div style="flex:1">
-        <div class="preset-name" id="presetName">No preset loaded</div>
-        <div class="preset-sub" id="presetSub">Changes go to the pedal instantly and the pedal keeps them.</div>
+      <button class="preset-num" id="presetNum" aria-label="Choose preset">–<small>▾</small></button>
+      <div class="preset-title" id="presetTitle">
+        <div class="preset-name"><span id="presetName">No preset loaded</span><span class="dirty hidden" id="dirtyDot" title="Unsaved changes"></span></div>
+        <div class="preset-sub" id="presetSub">Tap the number to choose another preset.</div>
       </div>
     </div>
-    <div class="preset-actions">
-      <button id="refreshBtn" disabled>↻ Re-read</button>
-      <button id="revertBtn" disabled>Undo changes</button>
+    <div class="preset-actions editable">
+      <button id="saveBtn" disabled>Save</button>
+      <button id="undoBtn" disabled>Undo changes</button>
+      <button id="resetBtn" disabled>Reset</button>
     </div>
   </section>
 
@@ -201,9 +245,21 @@
 
   <p class="footnote">
     Unofficial tool, not made or endorsed by IK Multimedia. Protocol from the open-source
-    TonexOneController project (Greg Smith, Apache 2.0). Back up your presets in ToneX Editor before first use.
+    TonexOneController project (Greg Smith, Apache 2.0). Back up your presets in ToneX Editor.
   </p>
 </main>
+
+<div class="sheet-back hidden" id="sheet">
+  <div class="sheet" role="dialog" aria-modal="true">
+    <div class="sheet-head"><h3 id="sheetTitle"></h3><button id="sheetClose">Close</button></div>
+    <div id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="notice hidden" id="notice">
+  <div id="noticeText"></div>
+  <div class="notice-actions" id="noticeActions"></div>
+</div>
 
 <script>
 "use strict";
@@ -211,65 +267,68 @@
 /* =====================================================================
    1. PARAMETER MAP (order and ranges from TonexOneController tonex_params.c)
    The pedal sends 109 numbers per preset, always in this order.
-   Only the ones this page shows are listed here by index.
    ===================================================================== */
 const PARAM_COUNT = 109;
+const PRESET_COUNT = 20;
 
 const P = {
-  GATE_ON: 1,
+  GATE_ON: 1, GATE_THRESH: 2, GATE_RELEASE: 3, GATE_DEPTH: 4,
   COMP_ON: 6, COMP_THRESH: 7, COMP_MAKEUP: 8, COMP_ATTACK: 9,
   EQ_BASS: 11, EQ_BASS_FREQ: 12, EQ_MID: 13, EQ_MID_Q: 14, EQ_MID_FREQ: 15, EQ_TREBLE: 16, EQ_TREBLE_FREQ: 17,
-  AMP_ON: 18, AMP_GAIN: 20, AMP_VOLUME: 21, AMP_MIX: 22, AMP_PRESENCE: 34, AMP_DEPTH: 35,
-  REVERB_ON: 37, REVERB_MODEL: 38,       // each reverb model has 4 params starting at 39
-  MOD_ON: 64,
-  DELAY_ON: 95,
+  AMP_ON: 18, AMP_GAIN: 20, AMP_VOLUME: 21, AMP_MIX: 22,
+  CAB_TYPE: 24,                 // 0 = Tone Model cab, 1 = VIR, 2 = off
+  VIR_CAB: 25, VIR_RESO: 26, VIR_MIC1: 27, VIR_MIC1_X: 28, VIR_MIC1_Z: 29, VIR_MIC2: 30, VIR_MIC2_X: 31, VIR_MIC2_Z: 32, VIR_BLEND: 33,
+  AMP_PRESENCE: 34, AMP_DEPTH: 35,
+  REVERB_ON: 37, REVERB_MODEL: 38,
+  MOD_ON: 64, MOD_MODEL: 65,
+  DELAY_ON: 95, DELAY_MODEL: 96,
 };
+const CAB_TONE_MODEL = 0, CAB_VIR = 1, CAB_OFF = 2;
 
-const REVERB_MODELS = ["Spring 1", "Spring 2", "Spring 3", "Spring 4", "Room", "Plate"];
-// for model m: time = 39 + m*4, pre-delay = +1, colour = +2, mix = +3
-const reverbParam = (model, which) => 39 + model * 4 + which;
+const SUBDIVISIONS = ["1/32", "1/32 dotted", "1/32 triplet", "1/16", "1/16 dotted", "1/16 triplet",
+  "1/8", "1/8 dotted", "1/8 triplet", "1/4", "1/4 dotted", "1/4 triplet",
+  "1/2", "1/2 dotted", "1/2 triplet", "1/1", "1/1 dotted", "1/1 triplet"];
 
-// [index, label, min, max, step, unit]
-const SECTIONS = [
-  {
-    title: "Amp", toggle: P.AMP_ON,
-    sliders: [
-      [P.AMP_GAIN, "Gain", 0, 10, 0.1, ""],
-      [P.AMP_VOLUME, "Model volume", 0, 10, 0.1, ""],
-      [P.AMP_MIX, "Model mix", 0, 100, 1, "%"],
-      [P.AMP_PRESENCE, "Presence", 0, 10, 0.1, ""],
-      [P.AMP_DEPTH, "Depth", 0, 10, 0.1, ""],
-    ],
-  },
-  {
-    title: "EQ",
-    sliders: [
-      [P.EQ_BASS, "Bass", 0, 10, 0.1, ""],
-      [P.EQ_MID, "Mid", 0, 10, 0.1, ""],
-      [P.EQ_TREBLE, "Treble", 0, 10, 0.1, ""],
-    ],
-    advanced: [
-      [P.EQ_BASS_FREQ, "Bass frequency", 75, 600, 5, "Hz"],
-      [P.EQ_MID_FREQ, "Mid frequency", 150, 5000, 10, "Hz"],
-      [P.EQ_MID_Q, "Mid Q (width)", 0.2, 3, 0.05, ""],
-      [P.EQ_TREBLE_FREQ, "Treble frequency", 1000, 4000, 10, "Hz"],
-    ],
-  },
-  {
-    title: "Compressor", toggle: P.COMP_ON,
-    sliders: [
-      [P.COMP_THRESH, "Threshold", -40, 0, 0.5, "dB"],
-      [P.COMP_MAKEUP, "Make-up gain", -30, 10, 0.5, "dB"],
-      [P.COMP_ATTACK, "Attack", 1, 51, 1, "ms"],
-    ],
-  },
-  { title: "Reverb", toggle: P.REVERB_ON, reverb: true },
+// Slider definition: [index, label, min, max, step, unit]
+const REVERB_MODELS = ["Spring 1", "Spring 2", "Spring 3", "Spring 4", "Room", "Plate"].map((name, m) => {
+  const b = 39 + m * 4;     // time, pre-delay, colour, mix
+  return { name, sliders: [[b + 3, "Mix", 0, 100, 1, "%"], [b, "Time", 0, 10, 0.1, ""], [b + 1, "Pre-delay", 0, 500, 1, "ms"], [b + 2, "Colour", -10, 10, 0.1, ""]] };
+});
+
+const MOD_MODELS = [
+  { name: "Chorus",  sync: 66, ts: 67, rate: [68, "Rate", 0.1, 10, 0.05, "Hz"], sliders: [[69, "Depth", 0, 100, 1, "%"], [70, "Level", 0, 10, 0.1, ""]] },
+  { name: "Tremolo", sync: 71, ts: 72, rate: [73, "Rate", 0.1, 10, 0.05, "Hz"], sliders: [[74, "Shape", 0, 10, 0.1, ""], [75, "Spread", 0, 100, 1, "%"], [76, "Level", 0, 10, 0.1, ""]] },
+  { name: "Phaser",  sync: 77, ts: 78, rate: [79, "Rate", 0.1, 10, 0.05, "Hz"], sliders: [[80, "Depth", 0, 100, 1, "%"], [81, "Level", 0, 10, 0.1, ""]] },
+  { name: "Flanger", sync: 82, ts: 83, rate: [84, "Rate", 0.1, 10, 0.05, "Hz"], sliders: [[85, "Depth", 0, 100, 1, "%"], [86, "Feedback", 0, 100, 1, "%"], [87, "Level", 0, 10, 0.1, ""]] },
+  { name: "Rotary",  sync: 88, ts: 89, rate: [90, "Speed", 0, 400, 1, ""], sliders: [[91, "Radius", 0, 300, 1, ""], [92, "Spread", 0, 100, 1, "%"], [93, "Level", 0, 10, 0.1, ""]] },
 ];
 
-const BLOCK_TOGGLES = [
-  [P.GATE_ON, "Gate"], [P.COMP_ON, "Comp"], [P.AMP_ON, "Amp"],
-  [P.MOD_ON, "Mod"], [P.DELAY_ON, "Delay"], [P.REVERB_ON, "Reverb"],
-];
+const DELAY_MODELS = ["Digital", "Tape"].map((name, m) => {
+  const b = 97 + m * 6;     // sync, subdivision, time, feedback, ping-pong, mix
+  return { name, sync: b, ts: b + 1, rate: [b + 2, "Time", 0, 1000, 1, "ms"],
+           sliders: [[b + 5, "Mix", 0, 100, 1, "%"], [b + 3, "Feedback", 0, 100, 1, "%"]],
+           switches: [[b + 4, "Ping-pong"]] };
+});
+
+// Human names for every parameter (used in the log and in "the pedal also changed…" notices)
+const PARAM_LABELS = (() => {
+  const L = ["Gate pre/post", "Gate on", "Gate threshold", "Gate release", "Gate depth",
+    "Comp pre/post", "Comp on", "Comp threshold", "Comp make-up", "Comp attack",
+    "EQ pre/post", "Bass", "Bass frequency", "Mid", "Mid Q", "Mid frequency", "Treble", "Treble frequency",
+    "Amp on", "Amp switch 1", "Gain", "Model volume", "Model mix", "Cab (unknown)", "Cab type",
+    "VIR cabinet", "VIR resonance", "VIR mic 1", "VIR mic 1 X", "VIR mic 1 Z", "VIR mic 2", "VIR mic 2 X", "VIR mic 2 Z", "VIR blend",
+    "Presence", "Depth", "Reverb position", "Reverb on", "Reverb model"];
+  for (const m of ["Spring 1", "Spring 2", "Spring 3", "Spring 4", "Room", "Plate"])
+    for (const p of ["time", "pre-delay", "colour", "mix"]) L.push(`Reverb ${m} ${p}`);
+  L.push("Mod pre/post", "Mod on", "Mod model");
+  const modNames = { Chorus: ["rate", "depth", "level"], Tremolo: ["rate", "shape", "spread", "level"], Phaser: ["rate", "depth", "level"],
+    Flanger: ["rate", "depth", "feedback", "level"], Rotary: ["speed", "radius", "spread", "level"] };
+  for (const [m, ps] of Object.entries(modNames)) for (const p of ["sync", "subdivision", ...ps]) L.push(`${m} ${p}`);
+  L.push("Delay pre/post", "Delay on", "Delay model");
+  for (const m of ["Digital", "Tape"]) for (const p of ["sync", "subdivision", "time", "feedback", "ping-pong", "mix"]) L.push(`${m} delay ${p}`);
+  return L;
+})();
+if (PARAM_LABELS.length !== PARAM_COUNT) console.error("PARAM_LABELS length", PARAM_LABELS.length);
 
 /* =====================================================================
    2. PROTOCOL: framing, CRC, building and reading messages
@@ -336,11 +395,16 @@ const Proto = (() => {
   const setParam = (index, value) =>
     frame([0xb9, 0x03, 0x81, 0x09, 0x03, 0x82, 0x0a, 0x00, 0x80, 0x0b, 0x03,
            0xb9, 0x04, 0x02, 0x00, index & 0x7F, 0x88, ...floatBytes(value)]);
+  // Send the pedal's own state block back (used only to change the preset in the active slot)
+  const setState = (body) =>
+    frame([0xb9, 0x03, 0x81, 0x06, 0x03, 0x82, body.length & 0xFF, (body.length >> 8) & 0xFF, 0x80, 0x0b, 0x03, ...body]);
 
   // ---- reading what the pedal sends ----
   const TYPE = { HELLO: 0x02, STATE: 0x0306, PRESET: 0x0304, PRESET_FULL: 0x0303, PARAM: 0x0309 };
   const NAME_MARKER = [0xB9, 0x04, 0xB9, 0x02, 0xBC, 0x21];
   const PARAMS_MARKER = [0xBA, 0x03, 0xBA, PARAM_COUNT];
+  // positions counted back from the end of the state block (from TonexOneController)
+  const STATE_END = { SLOT_A: 18, SLOT_B: 16, SLOT_C: 14, CURRENT_SLOT: 11 };
 
   // Decode an unescaped frame body (everything between the 7E flags). Returns a message object or {error}.
   function decode(raw) {
@@ -357,11 +421,12 @@ const Proto = (() => {
     const body = data.subarray(i);
     const msg = { type, size, body, sizeOk: body.length === size };
 
-    if (type === TYPE.STATE && body.length >= 18) {
+    if (type === TYPE.STATE && body.length >= 30) {
       const L = body.length;
-      msg.slots = [body[L - 18], body[L - 16], body[L - 14]];  // A, B, C
-      msg.slot = body[L - 11];                                  // 0 = A, 1 = B, else C
-      msg.preset = msg.slots[msg.slot <= 1 ? msg.slot : 2];
+      msg.slots = [body[L - STATE_END.SLOT_A], body[L - STATE_END.SLOT_B], body[L - STATE_END.SLOT_C]];
+      msg.slot = body[L - STATE_END.CURRENT_SLOT];            // 0 = A, 1 = B, else C
+      msg.slotIndex = msg.slot <= 1 ? msg.slot : 2;
+      msg.preset = msg.slots[msg.slotIndex];
     }
 
     if (type === TYPE.PRESET) {
@@ -385,7 +450,7 @@ const Proto = (() => {
     }
 
     if (type === TYPE.PARAM) {
-      // B9 04 02 <n> <n> 88 <float>  (02 = preset parameter; 03 would be a global)
+      // B9 04 02 00 <index> 88 <float>  (02 = preset parameter; 03 = a global)
       const k = indexOf(body, [0xB9, 0x04, 0x02]);
       if (k >= 0) {
         let j = k + 3, a, b;
@@ -398,6 +463,16 @@ const Proto = (() => {
       }
     }
     return msg;
+  }
+
+  // Changes the preset number in the active slot of a copy of the pedal's state block
+  function withPresetInActiveSlot(stateBody, preset) {
+    const body = Uint8Array.from(stateBody);
+    const L = body.length;
+    const slot = body[L - STATE_END.CURRENT_SLOT];
+    const off = slot === 0 ? STATE_END.SLOT_A : slot === 1 ? STATE_END.SLOT_B : STATE_END.SLOT_C;
+    body[L - off] = preset;
+    return body;
   }
 
   // Splits an incoming byte stream into frames (handles messages split across USB packets)
@@ -419,11 +494,12 @@ const Proto = (() => {
     }
   }
 
-  return { crc16, frame, hello, requestState, requestPreset, setParam, decode, Deframer, TYPE, floatBytes, readNum };
+  return { crc16, frame, hello, requestState, requestPreset, setParam, setState, withPresetInActiveSlot,
+           decode, Deframer, TYPE, floatBytes, readNum, STATE_END };
 })();
 
 /* =====================================================================
-   3. TRANSPORTS: WebUSB (Android) and Web Serial (laptop)
+   3. TRANSPORTS: Android app bridge, WebUSB (Chrome on Android), Web Serial (laptop)
    ===================================================================== */
 const VENDOR_ID = 0x1963;   // IK Multimedia
 const TONEX_ONE_PID = 0x00D1;
@@ -453,10 +529,8 @@ class UsbTransport {
     if (comm !== null && comm !== data) {
       try {
         await d.claimInterface(comm);
-        // 115200 baud, 1 stop bit, no parity, 8 bits (the pedal ignores it, but it's what the editor does)
         await d.controlTransferOut({ requestType: "class", recipient: "interface", request: 0x20, value: 0, index: comm },
           Uint8Array.from([0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08]));
-        // DTR + RTS on
         await d.controlTransferOut({ requestType: "class", recipient: "interface", request: 0x22, value: 0x03, index: comm });
       } catch (e) {
         log("Note: couldn't set line options (" + e.message + "). Carrying on.");
@@ -546,49 +620,62 @@ class AndroidTransport {
   async close() { this.running = false; window.AndroidUsb.close(); }
 }
 
-/* Demo mode (add ?demo to the address): a pretend pedal, for trying the screen without hardware.
-   It answers with real, framed messages so the same reading code is exercised. */
+/* Demo mode (add ?demo to the address): a pretend pedal with 20 presets, for trying the screen
+   without hardware. It answers with real, framed messages so the same reading code is exercised.
+   ?demo=bug makes it misbehave (changing Treble whenever Reverb is switched) to test the warning. */
 class DemoTransport {
   constructor() {
-    this.values = [0,1,-64,20,-60, 1,0,-14,-6,14, 0,5,300,5,0.7,750,5,1900, 1,0,5.5,5,100,1,0,
+    const base = [0,1,-64,20,-60, 1,0,-14,-6,14, 0,5,300,5,0.7,750,5,1900, 1,0,5.5,5,100,1,0,
       5,0,0,0,0,0,0,0,0, 5,5, 1,1,4, 5,0,0,30, 5,0,0,30, 5,0,0,30, 5,0,0,30, 3.5,20,0,22, 5,0,0,30];
-    while (this.values.length < PARAM_COUNT) this.values.push(0);
-    this.values[P.DELAY_ON] = 0; this.values[P.MOD_ON] = 0;
+    while (base.length < PARAM_COUNT) base.push(0);
+    const names = ["Taylor 1", "Taylor Edge", "Plexi Clean", "Plexi Crunch", "AC30 Chime", "Twin Clean", "JCM Lead", "Bassman",
+      "Deluxe Reverb", "Dumble Smooth", "Rectifier", "5150 Rhythm", "Matchless", "Friedman BE", "Vox Top Boost", "Bogner Shiva",
+      "Soldano SLO", "Orange OR50", "Two Rock", "Ambient Clean"];
+    this.presets = names.map((name, i) => ({ name, values: base.map((v, k) => k === P.AMP_GAIN ? 2 + (i % 8) : v) }));
+    this.slots = [0, 1, 2]; this.slot = 0;
+    this.bug = location.search.includes("bug");
   }
+  get current() { return this.presets[this.slots[this.slot]]; }
   async open(onData) { this.onData = onData; }
   reply(type, body) {
     const t = [0x81, type & 0xFF, type >> 8];
     const s = [0x82, body.length & 0xFF, body.length >> 8];
-    const payload = [0xb9, 0x03, ...t, ...s, 0x02, ...body];
-    const framed = Proto.frame(payload);
-    // deliver in 64-byte chunks like real USB
-    setTimeout(() => { for (let i = 0; i < framed.length; i += 64) this.onData(framed.subarray(i, i + 64)); }, 60);
+    const framed = Proto.frame([0xb9, 0x03, ...t, ...s, 0x02, ...body]);
+    setTimeout(() => { for (let i = 0; i < framed.length; i += 64) this.onData(framed.subarray(i, i + 64)); }, 40);
+  }
+  stateBody() {
+    const body = new Array(60).fill(0);
+    const L = body.length, E = Proto.STATE_END;
+    body[L - E.SLOT_A] = this.slots[0]; body[L - E.SLOT_B] = this.slots[1]; body[L - E.SLOT_C] = this.slots[2];
+    body[L - E.CURRENT_SLOT] = this.slot;
+    return body;
   }
   async write(bytes) {
-    const d = new Proto.Deframer(f => {
+    new Proto.Deframer(f => {
       const crcOk = Proto.crc16(f.subarray(0, f.length - 2)) === (f[f.length - 2] | f[f.length - 1] << 8);
       if (!crcOk) return;
-      const kind = f[2] === 0x00 ? (f[8] === 0x01 ? "hello" : "state") : (f[3] === 0x00 ? "preset" : "param");
-      if (kind === "hello") this.reply(0x02, [0xb9, 0x02, 0x02, 0x0b]);
-      if (kind === "state") {
-        const body = new Array(40).fill(0);
-        const L = body.length; body[L - 18] = 4; body[L - 16] = 9; body[L - 14] = 12; body[L - 11] = 0;
-        this.reply(0x0306, body);
-      }
-      if (kind === "preset") {
-        const name = new TextEncoder().encode("Demo Clean Plexi");
-        const nameBytes = new Array(33).fill(0); name.forEach((b, i) => nameBytes[i] = b);
+      if (f[2] === 0x00) {                       // hello or request state
+        if (f[8] === 0x01) this.reply(0x02, [0xb9, 0x02, 0x02, 0x0b]);
+        else this.reply(0x0306, this.stateBody());
+      } else if (f[3] === 0x00) {                // request preset details
+        const p = this.presets[f[15]];
+        const nameBytes = new Array(33).fill(0); new TextEncoder().encode(p.name).forEach((b, i) => nameBytes[i] = b);
         const body = [0xB9, 0x03, 0x00, 0x00, 0xB9, 0x04, 0xB9, 0x02, 0xBC, 0x21, ...nameBytes, 0xBA, 0x01, 0x88, 0, 0, 0, 0,
           0xBA, 0x03, 0xBA, PARAM_COUNT];
-        for (const v of this.values) body.push(0x88, ...Proto.floatBytes(v));
+        for (const v of p.values) body.push(0x88, ...Proto.floatBytes(v));
         this.reply(0x0304, body);
-      }
-      if (kind === "param") {
+      } else if (f[3] === 0x06) {                // set state (preset change)
+        const body = f.subarray(11, f.length - 2), L = body.length, E = Proto.STATE_END;
+        this.slots = [body[L - E.SLOT_A], body[L - E.SLOT_B], body[L - E.SLOT_C]];
+        this.reply(0x0306, this.stateBody());
+      } else if (f[3] === 0x09) {                // set parameter
         const idx = f[15];
-        this.values[idx] = new DataView(f.buffer, f.byteOffset + 17, 4).getFloat32(0, true);
+        const v = new DataView(f.buffer, f.byteOffset + 17, 4).getFloat32(0, true);
+        this.current.values[idx] = v;
+        if (this.bug && idx === P.REVERB_ON) this.current.values[P.EQ_TREBLE] = 10;
+        this.reply(0x0309, [0xB9, 0x04, 0x02, 0x00, idx, 0x88, ...Proto.floatBytes(v)]);
       }
-    });
-    d.push(bytes);
+    }).push(bytes);
   }
   async close() {}
 }
@@ -599,13 +686,17 @@ class DemoTransport {
 const state = {
   transport: null,
   connected: false,
-  preset: null,          // preset number 0..19
-  slot: null,
+  stateBody: null,       // the pedal's last state block (needed to switch presets)
+  slots: [0, 0, 0], slotIndex: 0,
+  preset: null,          // preset number 0..19 in the active slot
   name: "",
-  values: null,          // 109 numbers for the current preset
-  originals: {},         // first values seen for each preset this session (for "Undo my changes")
-  dragging: null,        // param index currently under a finger
-  lastLocalEdit: 0,
+  values: null,          // 109 numbers: what we believe the pedal has right now
+  saved: null,           // 109 numbers: the last saved version of this preset
+  names: loadJSON("pr.names", new Array(PRESET_COUNT).fill(null)),
+  namesFetched: false,
+  dragging: null,
+  lastSendAt: 0,
+  pedalReported: new Set(),   // params the pedal told us it changed itself (knob turns)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -613,25 +704,68 @@ const logLines = [];
 function log(text) {
   const t = new Date().toTimeString().slice(0, 8);
   logLines.push(`${t}  ${text}`);
-  if (logLines.length > 300) logLines.shift();
+  if (logLines.length > 600) logLines.shift();
   const el = $("log"); if (el) el.textContent = logLines.join("\n");
 }
 const hex = (bytes, max = 48) => Array.from(bytes.subarray(0, max), b => b.toString(16).padStart(2, "0")).join(" ") + (bytes.length > max ? " …" : "");
+const fmtNum = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : Number(v.toFixed(2)).toString());
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function loadJSON(key, fallback) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v ?? fallback; } catch (e) { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+}
 
 function setStatus(text, kind) {
   $("statusText").textContent = text;
   $("status").className = "status " + (kind || "");
 }
 
-// All writes go through one queue so messages never overlap
+// All writes go through one queue, with a short gap between messages so the pedal never gets flooded
+const MESSAGE_GAP_MS = 30;
 let writeChain = Promise.resolve();
 function send(bytes, label) {
   writeChain = writeChain.then(async () => {
     if (!state.transport) return;
     try { await state.transport.write(bytes); }
     catch (e) { log(`Write failed (${label}): ${e.message}`); }
+    await sleep(MESSAGE_GAP_MS);
   });
   return writeChain;
+}
+
+/* ---- Preset reads: one request at a time, so every answer is matched to its question ----
+   purpose: "load"   = show this preset (new baseline)
+            "refresh"= re-read the current preset (keep the saved baseline)
+            "verify" = re-read after edits and check nothing else changed
+            "name"   = just learn the preset's name for the list */
+const reads = { busy: null, queue: [] };
+function queueRead(index, purpose) {
+  const urgent = purpose !== "name";
+  if (reads.queue.some(r => r.index === index && r.purpose === purpose)) return;
+  if (reads.busy && reads.busy.index === index && reads.busy.purpose === purpose) return;
+  const req = { index, purpose, tries: 0 };
+  if (urgent) reads.queue.unshift(req); else reads.queue.push(req);
+  pumpReads();
+}
+function pumpReads() {
+  if (reads.busy || !reads.queue.length || !state.transport) return;
+  const req = reads.busy = reads.queue.shift();
+  req.timer = setTimeout(() => {
+    log(`No answer for preset ${req.index + 1} (${req.purpose})`);
+    reads.busy = null;
+    if (++req.tries < 2) reads.queue.unshift(req);
+    pumpReads();
+  }, 2500);
+  send(Proto.requestPreset(req.index), "request preset");
+}
+
+let verifyTimer = null;
+function scheduleVerify(ms) {
+  clearTimeout(verifyTimer);
+  verifyTimer = setTimeout(() => { if (state.values && state.preset !== null) queueRead(state.preset, "verify"); }, ms);
 }
 
 let helloTimer = null;
@@ -647,33 +781,19 @@ function onFrame(raw) {
       send(Proto.requestState(), "request state");
       break;
 
-    case Proto.TYPE.STATE:
-      if (msg.preset === undefined) { log("State message too short to read"); break; }
-      log(`State: slots A=${msg.slots[0] + 1} B=${msg.slots[1] + 1} C=${msg.slots[2] + 1}, active ${"ABC"[Math.min(msg.slot, 2)]}`);
-      state.slot = msg.slot;
-      // the pedal sends state when a footswitch changes preset; read the (new) current preset
-      send(Proto.requestPreset(msg.preset), "request preset");
-      state.preset = msg.preset;
-      break;
-
-    case Proto.TYPE.PRESET:
-      if (!msg.values) { log(`Preset message received but parameters not found [${hex(msg.body)}]`); break; }
-      state.name = msg.name || "";
-      state.values = msg.values;
-      if (!state.originals[state.preset]) state.originals[state.preset] = msg.values.slice();
-      log(`Preset ${state.preset + 1} "${state.name}" read (${msg.values.length} parameters)`);
-      setStatus("Connected", "on");
-      renderAll();
-      break;
+    case Proto.TYPE.STATE: onState(msg); break;
+    case Proto.TYPE.PRESET: onPreset(msg); break;
 
     case Proto.TYPE.PARAM:
-      if (msg.paramIndex !== undefined && state.values && msg.paramIndex < PARAM_COUNT) {
-        // a knob turned on the pedal (or the pedal confirming ours)
-        if (state.dragging !== msg.paramIndex && Date.now() - state.lastLocalEdit > 600) {
-          state.values[msg.paramIndex] = msg.paramValue;
-          renderValue(msg.paramIndex);
-        }
+      // The pedal reports a change (a knob turned on the pedal, or confirming ours).
+      // We don't trust this message to update the screen; we re-read the real preset instead.
+      if (msg.paramIndex !== undefined && msg.paramIndex < PARAM_COUNT) {
+        log(`Pedal reports ${PARAM_LABELS[msg.paramIndex]} = ${fmtNum(msg.paramValue)}`);
+        state.pedalReported.add(msg.paramIndex);
+      } else {
+        log(`Pedal change message not understood [${hex(msg.body)}]`);
       }
+      scheduleVerify(400);
       break;
 
     case Proto.TYPE.PRESET_FULL:
@@ -684,9 +804,96 @@ function onFrame(raw) {
   }
 }
 
+function onState(msg) {
+  if (msg.preset === undefined) { log(`State message too short to read (${msg.body.length} bytes)`); return; }
+  if (msg.sizeOk) state.stateBody = Uint8Array.from(msg.body);
+  state.slots = msg.slots; state.slotIndex = msg.slotIndex;
+  log(`State: slots A=${msg.slots[0] + 1} B=${msg.slots[1] + 1} C=${msg.slots[2] + 1}, active ${"ABC"[msg.slotIndex]}`);
+  if (msg.preset !== state.preset || !state.values) {
+    // the preset changed (footswitch, or our own preset change)
+    state.preset = msg.preset;
+    state.values = null; state.saved = null;
+    renderAll();
+    queueRead(msg.preset, "load");
+  }
+}
+
+function onPreset(msg) {
+  const req = reads.busy;
+  if (req) { clearTimeout(req.timer); reads.busy = null; }
+  setTimeout(pumpReads, 0);
+
+  if (!msg.values) { log(`Preset message received but parameters not found [${hex(msg.body)}]`); return; }
+  const index = req ? req.index : state.preset;
+  const purpose = req ? req.purpose : "refresh";
+  if (msg.name !== undefined) setPresetName(index, msg.name);
+
+  if (purpose === "name" || index !== state.preset) return;
+
+  if (purpose === "verify") return onVerify(msg.values);
+
+  state.name = msg.name || "";
+  state.values = msg.values.slice();
+  if (purpose === "load" || !state.saved) {
+    state.saved = msg.values.slice();
+    log(`Preset ${index + 1} "${state.name}" read (${msg.values.length} parameters)`);
+    checkEarlierUnsaved();
+  } else {
+    log(`Preset ${index + 1} re-read`);
+  }
+  state.pedalReported.clear();
+  setStatus("Connected", "on");
+  renderAll();
+  fetchNames();
+}
+
+// After edits: compare what the pedal really has with what we expect
+function onVerify(got) {
+  if (pending.size || state.dragging !== null || Date.now() - state.lastSendAt < 350) { scheduleVerify(500); return; }
+  const expected = state.values;
+  const changed = [];
+  for (let i = 0; i < PARAM_COUNT; i++) if (!same(expected[i], got[i])) changed.push(i);
+  const surprises = changed.filter(i => !state.pedalReported.has(i));
+  for (const i of changed) {
+    const who = state.pedalReported.has(i) ? "on the pedal" : "UNEXPECTED";
+    log(`Check: ${PARAM_LABELS[i]} ${fmtNum(expected[i])} → ${fmtNum(got[i])} (${who})`);
+  }
+  if (!changed.length) log("Check: pedal matches the screen ✓");
+  state.pedalReported.clear();
+  state.values = got.slice();
+  renderAll();
+  persistUnsaved();
+  if (surprises.length) {
+    const list = surprises.slice(0, 4).map(i => `<b>${PARAM_LABELS[i]}</b> ${fmtNum(expected[i])} → ${fmtNum(got[i])}`).join("<br>");
+    const more = surprises.length > 4 ? `<br>…and ${surprises.length - 4} more (see log)` : "";
+    showNotice(`The pedal also changed something you didn't touch:<br>${list}${more}`, [
+      { label: "Put back", primary: true, action: () => {
+          for (const i of surprises) setParam(i, expected[i], { now: true });
+          log(`Put back ${surprises.length} setting(s)`);
+        } },
+      { label: "Keep", action: () => {} },
+    ]);
+  }
+}
+const same = (a, b) => Math.abs(Math.fround(a) - Math.fround(b)) <= 1e-4 * Math.max(1, Math.abs(a));
+
+function setPresetName(index, name) {
+  if (index < 0 || index >= PRESET_COUNT) return;
+  if (state.names[index] !== name) { state.names[index] = name; saveJSON("pr.names", state.names); }
+  if (!$("sheet").classList.contains("hidden") && sheetMode === "presets") renderPresetList();
+}
+
+function fetchNames() {
+  if (state.namesFetched) return;
+  state.namesFetched = true;
+  for (let i = 0; i < PRESET_COUNT; i++) if (i !== state.preset) queueRead(i, "name");
+}
+
 async function startSession(transport) {
   await stopSession(true);
   state.transport = transport;
+  state.namesFetched = false;
+  reads.busy = null; reads.queue = [];
   const deframer = new Proto.Deframer(onFrame);
   setStatus("Connecting…", "busy");
   try {
@@ -705,14 +912,15 @@ async function startSession(transport) {
   $("connectHelp").classList.add("hidden");
   log("Connected. Saying hello…");
   send(Proto.hello(), "hello");
-  // if the pedal doesn't answer hello, ask for its state anyway
   helloTimer = setTimeout(() => { log("No hello reply — asking for state anyway"); send(Proto.requestState(), "request state"); }, 1200);
 }
 
 async function stopSession(quiet) {
-  clearTimeout(helloTimer);
+  clearTimeout(helloTimer); clearTimeout(verifyTimer);
+  if (reads.busy) clearTimeout(reads.busy.timer);
+  reads.busy = null; reads.queue = [];
   if (state.transport) { const t = state.transport; state.transport = null; await t.close(); }
-  state.connected = false; state.values = null;
+  state.connected = false; state.values = null; state.saved = null; state.preset = null; state.stateBody = null;
   if (!quiet) {
     setStatus("Not connected", "");
     $("connectHelp").classList.remove("hidden");
@@ -723,12 +931,13 @@ async function stopSession(quiet) {
 function explainOpenError(e) {
   const m = (e && e.message) || "";
   let tip = "";
-  if (/claim|busy|Unable to claim|access/i.test(m))
+  if (/claim|busy|access/i.test(m))
     tip = "The phone's system may be holding the pedal's USB connection. Unplug, close other music/USB apps, plug back in and try again. If it keeps happening, copy the log and send it over.";
   else if (/No device selected/i.test(m))
     tip = "No pedal was picked in the list.";
-  if (tip) log("Tip: " + tip);
-  if (tip) alert(tip);
+  else if (/No ToneX|refused/i.test(m))
+    tip = m;
+  if (tip) { log("Tip: " + tip); alert(tip); }
 }
 
 async function connect() {
@@ -751,7 +960,7 @@ async function connect() {
   }
 }
 
-// Reconnect automatically to a pedal this phone has already allowed
+// Connect automatically when the pedal is already plugged in / allowed
 async function autoConnect() {
   if (location.search.includes("demo") || state.transport) return;
   if (window.AndroidUsb) {
@@ -767,65 +976,148 @@ async function autoConnect() {
 }
 
 /* =====================================================================
-   5. EDITING: throttled sends while dragging
+   5. EDITING, SAVE / UNDO, SWITCHING PRESETS
    ===================================================================== */
+// While dragging we send at most every 150 ms; the final value is sent when you let go.
+const DRAG_SEND_MS = 150;
 const pending = new Map();
-let flushTimer = null;
-function setParam(index, value) {
+let flushTimer = null, lastFlushAt = 0;
+function setParam(index, value, opts = {}) {
   if (!state.values) return;
   state.values[index] = value;
-  state.lastLocalEdit = Date.now();
   pending.set(index, value);
-  if (!flushTimer) flushTimer = setTimeout(flush, 35);
-  updateRevertButton();
+  if (opts.now) { clearTimeout(flushTimer); flushTimer = null; flush(); }
+  else if (!flushTimer) flushTimer = setTimeout(flush, Math.max(0, DRAG_SEND_MS - (Date.now() - lastFlushAt)));
+  renderValue(index);
+  updateDirty();
 }
 function flush() {
   flushTimer = null;
-  for (const [i, v] of pending) send(Proto.setParam(i, v), `param ${i}`);
+  if (!pending.size) return;
+  lastFlushAt = Date.now();
+  for (const [i, v] of pending) {
+    send(Proto.setParam(i, v), `param ${i}`);
+    state.lastSendAt = Date.now();
+  }
   pending.clear();
+  scheduleVerify(900);
+  persistUnsaved();
 }
 
-async function revert() {
-  const orig = state.originals[state.preset];
-  if (!orig || !state.values) return;
+function diffCount(a, b) {
+  if (!a || !b) return 0;
+  let n = 0;
+  for (let i = 0; i < PARAM_COUNT; i++) if (!same(a[i], b[i])) n++;
+  return n;
+}
+const isDirty = () => diffCount(state.values, state.saved) > 0;
+
+function save() {
+  if (!state.values) return;
+  state.saved = state.values.slice();
+  persistUnsaved();
+  updateDirty();
+  log(`Saved preset ${state.preset + 1}`);
+  showNotice("Saved ✓", [], "good", 1500);
+}
+
+async function undo() {
+  if (!state.values || !state.saved) return;
   let n = 0;
   for (let i = 0; i < PARAM_COUNT; i++) {
-    if (Math.abs(orig[i] - state.values[i]) > 1e-6) { await send(Proto.setParam(i, orig[i]), `revert ${i}`); state.values[i] = orig[i]; n++; }
+    if (!same(state.values[i], state.saved[i])) { setParam(i, state.saved[i], { now: true }); n++; }
   }
   log(`Undo: put back ${n} setting(s)`);
   renderAll();
 }
 
-function changedCount() {
-  const orig = state.originals[state.preset];
-  if (!orig || !state.values) return 0;
-  let n = 0;
-  for (let i = 0; i < PARAM_COUNT; i++) if (Math.abs(orig[i] - state.values[i]) > 1e-6) n++;
-  return n;
+function reset() {
+  log("Reset: re-reading the pedal");
+  state.namesFetched = false;
+  send(Proto.requestState(), "request state");
+  if (state.preset !== null) queueRead(state.preset, state.values ? "refresh" : "load");
 }
-function updateRevertButton() {
-  const n = changedCount();
-  $("revertBtn").disabled = n === 0;
-  $("revertBtn").textContent = n ? `Undo changes (${n})` : "Undo changes";
+
+// Unsaved edits are remembered per preset, so if you switch preset with the footswitch (or unplug)
+// the app can offer to put them back the next time it sees that preset.
+function persistUnsaved() {
+  if (state.preset === null || !state.saved) return;
+  const all = loadJSON("pr.unsaved", {});
+  if (isDirty()) all[state.preset] = { name: state.name, saved: state.saved };
+  else delete all[state.preset];
+  saveJSON("pr.unsaved", all);
+}
+function checkEarlierUnsaved() {
+  const all = loadJSON("pr.unsaved", {});
+  const rec = all[state.preset];
+  if (!rec) return;
+  if (rec.name !== state.name || !Array.isArray(rec.saved) || rec.saved.length !== PARAM_COUNT) {
+    delete all[state.preset]; saveJSON("pr.unsaved", all); return;
+  }
+  if (diffCount(state.values, rec.saved) === 0) { delete all[state.preset]; saveJSON("pr.unsaved", all); return; }
+  state.saved = rec.saved.slice();
+  log(`Preset ${state.preset + 1} still has unsaved changes from earlier`);
+  showNotice(`<b>${escapeHtml(state.name)}</b> still has changes you didn't save earlier.`, [
+    { label: "Undo them", primary: true, action: () => undo() },
+    { label: "Keep (save)", action: () => save() },
+  ]);
+}
+
+async function choosePreset(p) {
+  closeSheet();
+  if (p === state.preset) return;
+  if (!state.stateBody) { alert("The pedal hasn't sent its slot settings yet. Tap Reset and try again."); return; }
+  if (isDirty()) {
+    const answer = await ask(`Unsaved changes on ${state.name || "this preset"}`, "What should happen to them before switching?", [
+      { label: "Save them", value: "save", primary: true },
+      { label: "Undo them", value: "undo" },
+      { label: "Cancel", value: "cancel" },
+    ]);
+    if (answer === "cancel" || answer === null) return;
+    if (answer === "save") save(); else await undo();
+    await writeChain;
+  }
+  const body = Proto.withPresetInActiveSlot(state.stateBody, p);
+  log(`Loading preset ${p + 1} into slot ${"ABC"[state.slotIndex]}`);
+  state.stateBody = body;
+  state.slots[state.slotIndex] = p;
+  state.preset = p; state.values = null; state.saved = null; state.name = state.names[p] || "";
+  renderAll();
+  await send(Proto.setState(body), "set state");
+  queueRead(p, "load");
+  setTimeout(() => send(Proto.requestState(), "request state"), 300);   // confirm what the pedal did
 }
 
 /* =====================================================================
    6. UI
    ===================================================================== */
-const binders = {};   // param index -> list of functions that redraw it
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const binders = {};   // param index -> functions that redraw it
 function bind(index, fn) { (binders[index] = binders[index] || []).push(fn); }
 function renderValue(index) { (binders[index] || []).forEach(fn => fn(state.values ? state.values[index] : null)); }
 function renderAll() {
   const ready = !!state.values;
   $("app").classList.toggle("locked", !ready);
-  $("refreshBtn").disabled = !state.connected;
-  $("presetNum").textContent = ready ? String(state.preset + 1) : "–";
-  $("presetName").textContent = ready ? (state.name || "(no name)") : (state.connected ? "Reading pedal…" : "No preset loaded");
-  $("presetSub").textContent = ready
-    ? `Slot ${"ABC"[Math.min(state.slot ?? 0, 2)]} · changes go to the pedal instantly and the pedal keeps them`
-    : "Changes go to the pedal instantly and the pedal keeps them.";
+  $("presetNum").firstChild.textContent = state.preset !== null ? String(state.preset + 1) : "–";
+  $("presetName").textContent = ready ? (state.name || "(no name)")
+    : state.preset !== null ? `Loading ${state.names[state.preset] || "preset"}…`
+    : state.connected ? "Reading pedal…" : "No preset loaded";
+  $("presetSub").textContent = state.preset !== null
+    ? `Slot ${"ABC"[state.slotIndex]} · tap the number to choose another preset`
+    : "Tap the number to choose another preset.";
+  $("resetBtn").disabled = !state.connected;
   for (const i of Object.keys(binders)) renderValue(Number(i));
-  updateRevertButton();
+  updateDirty();
+}
+function updateDirty() {
+  const dirty = isDirty();
+  $("dirtyDot").classList.toggle("hidden", !dirty);
+  $("saveBtn").disabled = !dirty;
+  $("saveBtn").classList.toggle("primary", dirty);
+  $("undoBtn").disabled = !dirty;
+  const n = diffCount(state.values, state.saved);
+  $("undoBtn").textContent = n ? `Undo changes (${n})` : "Undo changes";
 }
 
 const isOn = (v) => v !== null && v >= 0.5;
@@ -836,18 +1128,36 @@ function makeToggle(index, label, cls) {
   b.className = cls; b.textContent = label;
   b.addEventListener("click", () => {
     if (!state.values) return;
-    setParam(index, isOn(state.values[index]) ? 0 : 1);
-    renderValue(index);
+    setParam(index, isOn(state.values[index]) ? 0 : 1, { now: true });
   });
   bind(index, (v) => { b.classList.toggle("on", isOn(v)); b.setAttribute("aria-pressed", isOn(v)); });
   return b;
 }
 
-function makeSlider([index, label, min, max, step, unit]) {
+// The cab has no on/off switch of its own: "off" is cab type 2. We remember the type to go back to.
+let lastCabType = CAB_TONE_MODEL;
+function makeCabToggle() {
+  const b = document.createElement("button");
+  b.className = "tog"; b.textContent = "Cab";
+  b.addEventListener("click", () => {
+    if (!state.values) return;
+    const t = Math.round(state.values[P.CAB_TYPE]);
+    if (t !== CAB_OFF) { lastCabType = t; setParam(P.CAB_TYPE, CAB_OFF, { now: true }); }
+    else setParam(P.CAB_TYPE, lastCabType, { now: true });
+  });
+  bind(P.CAB_TYPE, (v) => {
+    const on = v !== null && Math.round(v) !== CAB_OFF;
+    if (on) lastCabType = Math.round(v);
+    b.classList.toggle("on", on);
+  });
+  return b;
+}
+
+function makeSlider([index, label, min, max, step, unit, fmtFn]) {
   const wrap = document.createElement("div");
   wrap.className = "param";
   const dp = decimals(step);
-  const fmt = (v) => v === null ? "–" : (Number(v).toFixed(dp) + (unit ? " " + unit : ""));
+  const fmt = (v) => v === null ? "–" : fmtFn ? fmtFn(v) : (Number(v).toFixed(dp) + (unit ? " " + unit : ""));
   wrap.innerHTML = `
     <div class="param-top"><span class="param-label"></span><span class="param-val">–</span></div>
     <div class="param-row">
@@ -861,21 +1171,16 @@ function makeSlider([index, label, min, max, step, unit]) {
   const [minus, plus] = wrap.querySelectorAll(".step");
   Object.assign(range, { min, max, step });
 
-  const apply = (v) => {
-    v = Math.round(v / step) * step;
-    v = Number(v.toFixed(dp + 2));
-    setParam(index, v);
-    valEl.textContent = fmt(v);
-  };
-  range.addEventListener("input", () => apply(parseFloat(range.value)));
+  const tidy = (v) => Number((Math.round(v / step) * step).toFixed(dp + 2));
   range.addEventListener("pointerdown", () => state.dragging = index);
-  range.addEventListener("pointerup", () => state.dragging = null);
+  range.addEventListener("input", () => { const v = tidy(parseFloat(range.value)); setParam(index, v); valEl.textContent = fmt(v); });
+  // "change" fires when the finger lifts: send the final value straight away
+  range.addEventListener("change", () => { state.dragging = null; setParam(index, tidy(parseFloat(range.value)), { now: true }); });
   range.addEventListener("pointercancel", () => state.dragging = null);
   const nudge = (dir) => {
     if (!state.values) return;
-    let v = state.values[index] + dir * step;
-    v = Math.min(Math.max(v, Number(range.min)), Number(range.max));
-    apply(v); range.value = v;
+    const v = tidy(Math.min(Math.max(state.values[index] + dir * step, Number(range.min)), Number(range.max)));
+    setParam(index, v, { now: true });
   };
   minus.addEventListener("click", () => nudge(-1));
   plus.addEventListener("click", () => nudge(1));
@@ -891,64 +1196,223 @@ function makeSlider([index, label, min, max, step, unit]) {
   return wrap;
 }
 
+function makeSwitchRow(index, label) {
+  const row = document.createElement("div");
+  row.className = "row-switch";
+  row.innerHTML = "<span></span>";
+  row.firstChild.textContent = label;
+  row.appendChild(makeToggle(index, "OFF", "mini-tog"));
+  bind(index, (v) => { row.querySelector(".mini-tog").textContent = isOn(v) ? "ON" : "OFF"; });
+  return row;
+}
+
+// A row of choice buttons for a parameter that takes whole numbers (model, cab type, mic…)
+function makeChips(index, labels, cols = 3) {
+  const box = document.createElement("div");
+  box.className = "chips";
+  box.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  labels.forEach((name, value) => {
+    const b = document.createElement("button");
+    b.className = "chip"; b.textContent = name;
+    b.addEventListener("click", () => setParam(index, value, { now: true }));
+    box.appendChild(b);
+  });
+  bind(index, (v) => box.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", v !== null && Math.round(v) === i)));
+  return box;
+}
+
+function makeSubdivision(index) {
+  const wrap = document.createElement("div");
+  wrap.className = "param";
+  wrap.innerHTML = `<div class="param-top"><span class="param-label">Note value</span></div>`;
+  const sel = document.createElement("select");
+  SUBDIVISIONS.forEach((t, i) => { const o = document.createElement("option"); o.value = i; o.textContent = t; sel.appendChild(o); });
+  sel.addEventListener("change", () => setParam(index, Number(sel.value), { now: true }));
+  wrap.appendChild(sel);
+  bind(index, (v) => { if (v !== null) sel.value = String(Math.round(v)); });
+  return wrap;
+}
+
+// One card section per model (reverb, mod, delay): model buttons, then that model's controls
+function makeModelGroups(card, modelIndex, models) {
+  card.appendChild(makeChips(modelIndex, models.map(m => m.name), 3));
+  const groups = models.map(m => {
+    const g = document.createElement("div");
+    if (m.sync !== undefined) {
+      g.appendChild(makeSwitchRow(m.sync, "Sync to tempo"));
+      const ts = makeSubdivision(m.ts);
+      const rate = makeSlider(m.rate);
+      g.appendChild(ts); g.appendChild(rate);
+      bind(m.sync, (v) => { ts.classList.toggle("hidden", !isOn(v)); rate.classList.toggle("hidden", isOn(v)); });
+    }
+    for (const s of m.sliders) g.appendChild(makeSlider(s));
+    for (const [i, label] of m.switches || []) g.appendChild(makeSwitchRow(i, label));
+    card.appendChild(g);
+    return g;
+  });
+  bind(modelIndex, (v) => {
+    const m = v === null ? 0 : Math.round(v);
+    groups.forEach((g, i) => g.classList.toggle("hidden", i !== m));
+  });
+}
+
+function makeCard(title, toggleIndex, opts = {}) {
+  const card = document.createElement("section");
+  card.className = "card editable";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  head.innerHTML = "<h2></h2>";
+  head.querySelector("h2").textContent = title;
+  card.appendChild(head);
+  if (toggleIndex !== undefined) {
+    const t = makeToggle(toggleIndex, "ON", "mini-tog");
+    head.appendChild(t);
+    bind(toggleIndex, (v) => {
+      t.textContent = isOn(v) ? "ON" : "OFF";
+      card.classList.toggle("block-off", v !== null && !isOn(v));
+      if (opts.hideWhenOff) card.classList.toggle("hidden", v === null || !isOn(v));
+    });
+  }
+  $("sections").appendChild(card);
+  return card;
+}
+
 function buildUI() {
+  // Block on/off grid
   const tg = $("toggles");
-  for (const [i, label] of BLOCK_TOGGLES) tg.appendChild(makeToggle(i, label, "tog"));
+  tg.appendChild(makeToggle(P.GATE_ON, "Gate", "tog"));
+  tg.appendChild(makeToggle(P.COMP_ON, "Comp", "tog"));
+  tg.appendChild(makeToggle(P.AMP_ON, "Amp", "tog"));
+  tg.appendChild(makeCabToggle());
+  tg.appendChild(makeToggle(P.MOD_ON, "Mod", "tog"));
+  tg.appendChild(makeToggle(P.DELAY_ON, "Delay", "tog"));
+  tg.appendChild(makeToggle(P.REVERB_ON, "Reverb", "tog"));
 
-  const host = $("sections");
-  for (const sec of SECTIONS) {
-    const card = document.createElement("section");
-    card.className = "card editable";
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = `<h2></h2>`;
-    head.querySelector("h2").textContent = sec.title;
-    if (sec.toggle !== undefined) {
-      head.appendChild(makeToggle(sec.toggle, "ON", "mini-tog"));
-      bind(sec.toggle, (v) => {
-        card.classList.toggle("block-off", v !== null && !isOn(v));
-        head.querySelector(".mini-tog").textContent = isOn(v) ? "ON" : "OFF";
-      });
-    }
-    card.appendChild(head);
+  // Amp
+  let c = makeCard("Amp", P.AMP_ON);
+  for (const s of [[P.AMP_GAIN, "Gain", 0, 10, 0.1, ""], [P.AMP_VOLUME, "Model volume", 0, 10, 0.1, ""], [P.AMP_MIX, "Model mix", 0, 100, 1, "%"],
+                   [P.AMP_PRESENCE, "Presence", 0, 10, 0.1, ""], [P.AMP_DEPTH, "Depth", 0, 10, 0.1, ""]]) c.appendChild(makeSlider(s));
 
-    for (const s of sec.sliders || []) card.appendChild(makeSlider(s));
+  // EQ
+  c = makeCard("EQ");
+  for (const s of [[P.EQ_BASS, "Bass", 0, 10, 0.1, ""], [P.EQ_MID, "Mid", 0, 10, 0.1, ""], [P.EQ_TREBLE, "Treble", 0, 10, 0.1, ""]]) c.appendChild(makeSlider(s));
+  const adv = document.createElement("details");
+  adv.className = "adv";
+  adv.innerHTML = "<summary>Advanced: frequencies and Q</summary>";
+  for (const s of [[P.EQ_BASS_FREQ, "Bass frequency", 75, 600, 5, "Hz"], [P.EQ_MID_FREQ, "Mid frequency", 150, 5000, 10, "Hz"],
+                   [P.EQ_MID_Q, "Mid Q (width)", 0.2, 3, 0.05, ""], [P.EQ_TREBLE_FREQ, "Treble frequency", 1000, 4000, 10, "Hz"]]) adv.appendChild(makeSlider(s));
+  c.appendChild(adv);
 
-    if (sec.advanced) {
-      const det = document.createElement("details");
-      det.className = "adv";
-      det.innerHTML = "<summary>Advanced: frequencies and Q</summary>";
-      for (const s of sec.advanced) det.appendChild(makeSlider(s));
-      card.appendChild(det);
-    }
+  // Cab
+  c = makeCard("Cab");
+  c.appendChild(makeChips(P.CAB_TYPE, ["Tone Model", "VIR", "Off"], 3));
+  const vir = document.createElement("div");
+  vir.appendChild(makeSlider([P.VIR_CAB, "VIR cabinet", 0, 10, 1, "", v => `#${Math.round(v) + 1}`]));
+  const mics = ["Condenser", "Dynamic", "Ribbon"];
+  const m1 = document.createElement("div"); m1.className = "sub-label"; m1.textContent = "Mic 1";
+  vir.appendChild(m1); vir.appendChild(makeChips(P.VIR_MIC1, mics));
+  vir.appendChild(makeSlider([P.VIR_MIC1_X, "Mic 1 position (X)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC1_Z, "Mic 1 distance (Z)", 0, 10, 0.1, ""]));
+  const m2 = document.createElement("div"); m2.className = "sub-label"; m2.textContent = "Mic 2";
+  vir.appendChild(m2); vir.appendChild(makeChips(P.VIR_MIC2, mics));
+  vir.appendChild(makeSlider([P.VIR_MIC2_X, "Mic 2 position (X)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC2_Z, "Mic 2 distance (Z)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_BLEND, "Mic blend", -100, 100, 1, ""]));
+  vir.appendChild(makeSlider([P.VIR_RESO, "Resonance", 0, 10, 0.1, ""]));
+  c.appendChild(vir);
+  bind(P.CAB_TYPE, (v) => vir.classList.toggle("hidden", v === null || Math.round(v) !== CAB_VIR));
 
-    if (sec.reverb) {
-      const models = document.createElement("div");
-      models.className = "models";
-      const groups = [];
-      REVERB_MODELS.forEach((name, m) => {
-        const b = document.createElement("button");
-        b.className = "model"; b.textContent = name;
-        b.addEventListener("click", () => { setParam(P.REVERB_MODEL, m); renderValue(P.REVERB_MODEL); });
-        models.appendChild(b);
-        const g = document.createElement("div");
-        g.appendChild(makeSlider([reverbParam(m, 3), "Mix", 0, 100, 1, "%"]));
-        g.appendChild(makeSlider([reverbParam(m, 0), "Time", 0, 10, 0.1, ""]));
-        g.appendChild(makeSlider([reverbParam(m, 1), "Pre-delay", 0, 500, 1, "ms"]));
-        g.appendChild(makeSlider([reverbParam(m, 2), "Colour", -10, 10, 0.1, ""]));
-        groups.push(g);
-      });
-      card.appendChild(models);
-      groups.forEach(g => card.appendChild(g));
-      bind(P.REVERB_MODEL, (v) => {
-        const m = v === null ? -1 : Math.round(v);
-        models.querySelectorAll(".model").forEach((b, i) => b.classList.toggle("on", i === m));
-        groups.forEach((g, i) => g.classList.toggle("hidden", i !== (m < 0 ? 0 : m)));
-      });
-    }
-    host.appendChild(card);
+  // Compressor
+  c = makeCard("Compressor", P.COMP_ON);
+  for (const s of [[P.COMP_THRESH, "Threshold", -40, 0, 0.5, "dB"], [P.COMP_MAKEUP, "Make-up gain", -30, 10, 0.5, "dB"],
+                   [P.COMP_ATTACK, "Attack", 1, 51, 1, "ms"]]) c.appendChild(makeSlider(s));
+
+  // Reverb
+  c = makeCard("Reverb", P.REVERB_ON);
+  makeModelGroups(c, P.REVERB_MODEL, REVERB_MODELS);
+
+  // Shown only while the block is on
+  c = makeCard("Noise gate", P.GATE_ON, { hideWhenOff: true });
+  for (const s of [[P.GATE_THRESH, "Threshold", -100, 0, 1, "dB"], [P.GATE_RELEASE, "Release", 5, 500, 1, "ms"],
+                   [P.GATE_DEPTH, "Depth", -100, -20, 1, "dB"]]) c.appendChild(makeSlider(s));
+
+  c = makeCard("Modulation", P.MOD_ON, { hideWhenOff: true });
+  makeModelGroups(c, P.MOD_MODEL, MOD_MODELS);
+
+  c = makeCard("Delay", P.DELAY_ON, { hideWhenOff: true });
+  makeModelGroups(c, P.DELAY_MODEL, DELAY_MODELS);
+}
+
+/* ---- bottom sheet: preset list and questions ---- */
+let sheetMode = null, sheetResolve = null;
+function openSheet(title, mode) {
+  sheetMode = mode;
+  $("sheetTitle").textContent = title;
+  $("sheet").classList.remove("hidden");
+}
+function closeSheet() {
+  $("sheet").classList.add("hidden");
+  if (sheetResolve) { const r = sheetResolve; sheetResolve = null; r(null); }
+  sheetMode = null;
+}
+
+function openPresetList() {
+  if (!state.connected) return;
+  openSheet("Choose a preset", "presets");
+  renderPresetList();
+}
+function renderPresetList() {
+  const body = $("sheetBody");
+  body.innerHTML = `<p>Loads into slot ${"ABC"[state.slotIndex]} (the active footswitch slot), like choosing it in ToneX Editor.</p>`;
+  for (let i = 0; i < PRESET_COUNT; i++) {
+    const b = document.createElement("button");
+    b.className = "preset-row" + (i === state.preset ? " current" : "");
+    b.innerHTML = `<b>${i + 1}</b><span></span>${i === state.preset ? "<em>LOADED</em>" : ""}`;
+    b.querySelector("span").textContent = state.names[i] || "…";
+    b.addEventListener("click", () => choosePreset(i));
+    body.appendChild(b);
   }
 }
+
+function ask(title, text, choices) {
+  return new Promise((resolve) => {
+    openSheet(title, "ask");
+    const body = $("sheetBody");
+    body.innerHTML = "<p></p>";
+    body.querySelector("p").textContent = text;
+    const list = document.createElement("div");
+    list.className = "choice-list";
+    for (const c of choices) {
+      const b = document.createElement("button");
+      b.textContent = c.label;
+      if (c.primary) b.className = "primary";
+      b.addEventListener("click", () => { sheetResolve = null; closeSheet(); resolve(c.value); });
+      list.appendChild(b);
+    }
+    body.appendChild(list);
+    sheetResolve = resolve;
+  });
+}
+
+/* ---- notice at the bottom ---- */
+let noticeTimer = null;
+function showNotice(html, actions, kind, autoHideMs) {
+  clearTimeout(noticeTimer);
+  $("noticeText").innerHTML = html;
+  $("notice").className = "notice" + (kind ? " " + kind : "");
+  const box = $("noticeActions");
+  box.innerHTML = "";
+  box.classList.toggle("hidden", !actions.length);
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.textContent = a.label;
+    if (a.primary) b.className = "primary";
+    b.addEventListener("click", () => { hideNotice(); a.action(); });
+    box.appendChild(b);
+  }
+  if (autoHideMs) noticeTimer = setTimeout(hideNotice, autoHideMs);
+}
+function hideNotice() { $("notice").classList.add("hidden"); }
 
 /* =====================================================================
    7. START
@@ -960,9 +1424,17 @@ const supported = !!window.AndroidUsb || ("usb" in navigator) || ("serial" in na
 if (!supported) { $("noSupport").classList.remove("hidden"); $("connectBtn").disabled = true; }
 if (location.search.includes("demo")) $("connectBtn").textContent = "Connect (demo pedal)";
 
+// if a finger lifts somewhere the slider didn't notice, stop treating it as "still dragging"
+window.addEventListener("pointerup", () => setTimeout(() => { state.dragging = null; }, 50));
+
 $("connectBtn").addEventListener("click", connect);
-$("refreshBtn").addEventListener("click", () => { log("Re-reading pedal"); send(Proto.requestState(), "request state"); });
-$("revertBtn").addEventListener("click", () => { if (confirm("Put this preset back to how it was when the app first read it?")) revert(); });
+$("presetNum").addEventListener("click", openPresetList);
+$("presetTitle").addEventListener("click", openPresetList);
+$("saveBtn").addEventListener("click", save);
+$("undoBtn").addEventListener("click", () => undo());
+$("resetBtn").addEventListener("click", reset);
+$("sheetClose").addEventListener("click", closeSheet);
+$("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) closeSheet(); });
 $("disconnectBtn").addEventListener("click", () => stopSession());
 $("copyLogBtn").addEventListener("click", async () => {
   const text = logLines.join("\n");
@@ -979,14 +1451,16 @@ $("copyLogBtn").addEventListener("click", async () => {
 if (window.AndroidUsb) {
   log(`Ready (Android app ${window.AndroidUsb.version()}).`);
   autoConnect();
-} else if ("usb" in navigator) {
-  navigator.usb.addEventListener("connect", () => autoConnect());
-  navigator.usb.addEventListener("disconnect", (e) => {
-    if (state.transport instanceof UsbTransport && state.transport.device === e.device) { log("Pedal unplugged"); stopSession(); }
-  });
-  autoConnect();
+} else {
+  log(`Ready. ${"usb" in navigator ? "WebUSB available. " : ""}${"serial" in navigator ? "Web Serial available. " : ""}`);
+  if ("usb" in navigator) {
+    navigator.usb.addEventListener("connect", () => autoConnect());
+    navigator.usb.addEventListener("disconnect", (e) => {
+      if (state.transport instanceof UsbTransport && state.transport.device === e.device) { log("Pedal unplugged"); stopSession(); }
+    });
+    autoConnect();
+  }
 }
-if (!window.AndroidUsb) log(`Ready. ${"usb" in navigator ? "WebUSB available. " : ""}${"serial" in navigator ? "Web Serial available. " : ""}`);
 </script>
 </body>
 </html>
