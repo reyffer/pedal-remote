@@ -1,4 +1,4 @@
-# Pedal Remote
+# Tonex Remote
 
 Edit the current preset on an IK Multimedia **ToneX One** from an Android phone over a USB-C cable.
 Block on/off (Gate, Comp, Amp, Mod, Delay, Reverb), amp (gain, model volume, mix, presence, depth),
@@ -16,10 +16,12 @@ New versions install over the old one.
 ## Use
 
 1. Plug the ToneX One into the phone (USB-C to USB-C).
-2. Android asks whether to open Pedal Remote. Tick "Always" and tap OK. (Or open the app and tap Connect.)
-3. The current preset loads. Changes are sent to the pedal immediately, and the ToneX One keeps them
-   (it auto-saves; there is no separate save step). **Undo changes** puts the preset back to how it was
-   when the app first read it.
+2. Android asks whether to open Tonex Remote. Tick "Always" and tap OK. (Or open the app and tap Connect.)
+3. The current preset loads. Changes are heard immediately. **Save** keeps them, **Undo** steps back one
+   change at a time, **Reset** puts every setting back to the last saved version. (The ToneX One itself
+   keeps every change automatically; Save/Undo/Reset are handled by the app.)
+4. Tap the preset number to load any of the 20 presets. Settings (gear icon) has size options.
+5. Sliders only move when you drag sideways, so scrolling over them never changes anything.
 
 Back up your presets in ToneX Editor before first use.
 

@@ -4,7 +4,7 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
 
     <application
-        android:label="Pedal Remote"
+        android:label="Tonex Remote"
         android:icon="@drawable/ic_launcher"
         android:roundIcon="@drawable/ic_launcher"
         android:theme="@style/AppTheme"

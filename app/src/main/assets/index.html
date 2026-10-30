@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0e0f12">
-<title>Pedal Remote</title>
+<meta name="theme-color" content="#0c0d10">
+<title>Tonex Remote</title>
 <!--
-  Pedal Remote — edit presets on a ToneX One from a phone over USB.
+  Tonex Remote — edit presets on a ToneX One from a phone over USB.
 
   How it talks to the pedal:
   - The ToneX One is a USB serial device (CDC). Inside the Android app the app does the USB work
@@ -22,185 +22,229 @@
     state message exactly as received, with just the preset number in the active slot changed.
 
   About saving: the ToneX One keeps every change automatically; there is no save command.
-  So "Save" here means "keep these changes", and "Undo changes" sends the last saved values back.
+  So "Save" here means "keep these changes", "Undo" steps back one change, and "Reset" sends the
+  last saved values back to the pedal.
 -->
 <style>
   :root {
-    --bg: #0e0f12;
-    --card: #17191e;
-    --card-2: #1e2127;
-    --line: #2a2e36;
-    --text: #eceef2;
-    --muted: #8d93a0;
-    --accent: #f5a524;
+    --bg: #0c0d10;
+    --card: #14161a;
+    --card-2: #1b1e23;
+    --line: #262a31;
+    --text: #e9ebef;
+    --muted: #868c98;
     --ok: #3ccf7a;
     --bad: #ff5d5d;
-    --radius: 16px;
+    --c: #f59a2b;            /* module colour; each section sets its own */
+    --tint: color-mix(in srgb, var(--c) 16%, transparent);
+    --tint-strong: color-mix(in srgb, var(--c) 28%, transparent);
+
+    /* sizes (changed by Settings → Size) */
+    --fs: 16px;              /* text */
+    --ctl: 46px;             /* button / slider touch height */
+    --gap: 12px;
+    --radius: 14px;
   }
+  body[data-size="s"] { --fs: 14px; --ctl: 40px; --gap: 9px; }
+  body[data-size="l"] { --fs: 18px; --ctl: 56px; --gap: 14px; }
+
+  /* ToneX module colours */
+  .m-gate   { --c: #a77bff; }
+  .m-comp   { --c: #e2457f; }
+  .m-amp, .m-cab, .m-eq { --c: #f59a2b; }
+  .m-mod    { --c: #efd03a; }
+  .m-delay  { --c: #7fdc8c; }
+  .m-reverb { --c: #5ec8f5; }
+
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text); }
   body {
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-size: 16px;
-    padding: 0 16px calc(32px + env(safe-area-inset-bottom));
+    font-size: var(--fs);
+    padding: 0 14px calc(28px + env(safe-area-inset-bottom));
     max-width: 640px; margin: 0 auto;
+    -webkit-user-select: none; user-select: none;
   }
   header {
     position: sticky; top: 0; z-index: 5;
     display: flex; align-items: center; gap: 12px;
-    padding: calc(12px + env(safe-area-inset-top)) 0 12px;
+    padding: calc(10px + env(safe-area-inset-top)) 0 10px;
     background: var(--bg);
   }
-  header h1 { font-size: 18px; margin: 0; flex: 1; letter-spacing: .02em; }
-  .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  header h1 { font-size: calc(var(--fs) + 1px); margin: 0; flex: 1; letter-spacing: .01em; font-weight: 700; }
+  .status { display: flex; align-items: center; gap: 7px; font-size: calc(var(--fs) - 3px); color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
   .status.on .dot { background: var(--ok); }
-  .status.busy .dot { background: var(--accent); }
+  .status.busy .dot { background: #f5a524; }
+  .icon-btn { min-height: 38px; width: 38px; padding: 0; display: grid; place-items: center; border-radius: 10px; }
+  .icon-btn svg { width: 20px; height: 20px; stroke: var(--muted); }
 
   button, select {
-    font: inherit; color: var(--text); background: var(--card-2);
-    border: 1px solid var(--line); border-radius: 12px;
-    min-height: 48px; padding: 0 16px; cursor: pointer;
+    font: inherit; font-size: calc(var(--fs) - 1px); color: var(--text); background: var(--card-2);
+    border: 1px solid var(--line); border-radius: 11px;
+    min-height: var(--ctl); padding: 0 14px; cursor: pointer;
   }
-  button:active { transform: scale(.98); }
-  button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 700; }
-  button:disabled { opacity: .4; }
+  button:active { filter: brightness(1.25); }
+  button.primary { background: #f5a524; color: #1a1205; border-color: #f5a524; font-weight: 700; }
+  button:disabled { opacity: .35; }
   select { width: 100%; appearance: none; -webkit-appearance: none; padding-right: 36px;
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 20px) 21px, calc(100% - 15px) 21px; background-size: 5px 5px; background-repeat: no-repeat; }
+    background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
 
   .card {
     background: var(--card); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+    border-radius: var(--radius); padding: calc(var(--gap) + 2px); margin-bottom: var(--gap);
   }
-  .card h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: .12em;
-    color: var(--muted); margin: 0; flex: 1;
+  .card-head { display: flex; align-items: center; gap: 10px; min-height: 34px; margin-bottom: 4px; }
+  .card-head h2 {
+    font-size: calc(var(--fs) - 3px); text-transform: uppercase; letter-spacing: .14em; font-weight: 700;
+    color: var(--c); margin: 0; flex: 1; display: flex; align-items: center; gap: 8px;
   }
-  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; min-height: 40px; }
+  .card-head h2::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  .card.plain .card-head h2 { color: var(--muted); }
+  .card.plain .card-head h2::before { display: none; }
 
-  .banner { padding: 14px 16px; border-radius: 12px; margin-bottom: 14px; line-height: 1.4; font-size: 15px; }
+  .banner { padding: 14px 16px; border-radius: 12px; margin-bottom: 14px; line-height: 1.4; }
   .banner.warn { background: #3a2a10; border: 1px solid #6b4c17; }
   .banner.info { background: #142330; border: 1px solid #23415a; }
   .hidden { display: none !important; }
 
   /* Preset header */
-  .preset { display: flex; align-items: center; gap: 14px; }
+  .preset { display: flex; align-items: center; gap: 12px; }
   .preset-num {
-    font-size: 26px; font-weight: 800; min-width: 64px; height: 64px; padding: 0;
+    font-size: calc(var(--fs) + 9px); font-weight: 800; min-width: calc(var(--ctl) + 10px); height: calc(var(--ctl) + 10px); padding: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1;
-    border-radius: 14px; background: var(--card-2); border: 1px solid var(--line);
+    border-radius: 12px;
   }
-  .preset-num small { font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 4px; letter-spacing: .05em; }
+  .preset-num small { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 3px; }
   .preset-title { flex: 1; min-width: 0; cursor: pointer; }
-  .preset-name { font-size: 20px; font-weight: 700; line-height: 1.2; word-break: break-word; }
-  .dirty { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); margin-left: 8px; vertical-align: middle; }
-  .preset-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
-  .preset-actions { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; margin-top: 14px; }
-  .preset-actions button { padding: 0 8px; font-size: 15px; }
+  .preset-name { font-size: calc(var(--fs) + 3px); font-weight: 700; line-height: 1.2; word-break: break-word; }
+  .dirty { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #f5a524; margin-left: 8px; vertical-align: middle; }
+  .preset-sub { font-size: calc(var(--fs) - 3px); color: var(--muted); margin-top: 3px; }
+  .preset-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: var(--gap); }
+  .preset-actions button { padding: 0 6px; }
 
-  /* Block on/off buttons */
+  /* Block on/off grid */
   .toggles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .tog {
-    min-height: 60px; border-radius: 14px; font-weight: 700; font-size: 14px; padding: 0 4px;
-    background: var(--card-2); color: var(--muted); border: 2px solid var(--line);
+    min-height: calc(var(--ctl) + 6px); border-radius: 12px; font-weight: 700; padding: 0 2px;
+    background: var(--card-2); color: var(--muted); border: 1px solid var(--line);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
   }
-  .tog.on { background: var(--accent); color: #1a1205; border-color: var(--accent); }
-  .mini-tog {
-    min-height: 40px; min-width: 64px; padding: 0 12px; border-radius: 999px;
-    font-size: 13px; font-weight: 800; letter-spacing: .06em;
-    background: var(--card-2); color: var(--muted); border: 2px solid var(--line);
+  .tog::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+  .tog.on { background: var(--tint); color: var(--c); border-color: var(--c); }
+  .tog.on::before { background: var(--c); box-shadow: 0 0 8px var(--c); }
+
+  .pill {
+    min-height: 32px; min-width: 56px; padding: 0 12px; border-radius: 999px;
+    font-size: calc(var(--fs) - 4px); font-weight: 800; letter-spacing: .08em;
+    background: transparent; color: var(--muted); border: 1px solid var(--line);
   }
-  .mini-tog.on { background: var(--accent); color: #1a1205; border-color: var(--accent); }
+  .pill.on { background: var(--tint); color: var(--c); border-color: var(--c); }
 
-  /* Sliders */
-  .param { padding: 10px 0; border-top: 1px solid var(--line); }
-  .param-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-  .param-label { font-size: 15px; }
-  .param-val { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
-  .param-row { display: flex; align-items: center; gap: 10px; }
-  .step { min-width: 44px; min-height: 44px; padding: 0; font-size: 22px; line-height: 1; border-radius: 10px; }
-  input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; height: 44px; background: transparent; margin: 0; }
-  input[type=range]::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--line); }
-  input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none; width: 28px; height: 28px; margin-top: -10px;
-    border-radius: 50%; background: var(--accent); border: 3px solid var(--bg);
+  /* Sliders: they only move when you drag sideways, so scrolling never changes anything */
+  .param { padding: 7px 0 3px; }
+  .param + .param, .chips + .param, .row-switch + .param { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+  .param-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .param-label { font-size: calc(var(--fs) - 1px); color: #c9cdd5; }
+  .param-val { font-size: calc(var(--fs) - 1px); font-variant-numeric: tabular-nums; color: var(--c); font-weight: 700; }
+  .param-row { display: flex; align-items: center; gap: 8px; }
+  .step {
+    min-width: calc(var(--ctl) - 8px); min-height: calc(var(--ctl) - 8px); padding: 0;
+    font-size: calc(var(--fs) + 4px); line-height: 1; border-radius: 10px; background: transparent; color: var(--muted);
   }
-  input[type=range]::-moz-range-track { height: 8px; border-radius: 4px; background: var(--line); }
-  input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); }
+  body.no-steps .step { display: none; }
+  .slider { position: relative; flex: 1; height: var(--ctl); touch-action: pan-y; cursor: ew-resize; }
+  .slider .track { position: absolute; left: 10px; right: 10px; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: var(--line); }
+  .slider .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; background: var(--c); }
+  .slider .thumb {
+    position: absolute; top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%;
+    background: #f3f4f6; border: 4px solid var(--c); transition: transform .08s;
+  }
+  .slider.active .thumb { transform: scale(1.3); }
+  .slider:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; border-radius: 8px; }
 
-  .row-switch { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line); }
-  .row-switch span { font-size: 15px; }
+  .row-switch { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
+  .row-switch span { font-size: calc(var(--fs) - 1px); color: #c9cdd5; }
 
-  .block-off .param, .block-off .row-switch, .block-off .chips { opacity: .45; }
+  .block-off .param, .block-off .row-switch, .block-off .chips, .block-off .sub-label, .block-off details { opacity: .4; }
 
-  details.adv { margin-top: 6px; }
   details.adv > summary {
-    list-style: none; cursor: pointer; padding: 12px 0; color: var(--muted);
-    font-size: 14px; border-top: 1px solid var(--line);
+    list-style: none; cursor: pointer; padding: 10px 0 6px; color: var(--muted);
+    font-size: calc(var(--fs) - 2px);
   }
   details.adv > summary::-webkit-details-marker { display: none; }
   details.adv > summary::before { content: "▸ "; }
   details.adv[open] > summary::before { content: "▾ "; }
 
-  .chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
-  .chip { min-height: 44px; font-size: 14px; padding: 0 6px; }
-  .chip.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
-  .sub-label { font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
+  .chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 4px 0 6px; }
+  .chip { min-height: calc(var(--ctl) - 8px); font-size: calc(var(--fs) - 2px); padding: 0 4px; color: #c9cdd5; }
+  .chip.on { background: var(--tint); border-color: var(--c); color: var(--c); font-weight: 700; }
+  .sub-label { font-size: calc(var(--fs) - 3px); color: var(--muted); margin: 10px 0 2px; text-transform: uppercase; letter-spacing: .1em; }
 
   /* Locked until a preset has been read */
-  main.locked .editable { opacity: .35; pointer-events: none; }
+  main.locked .editable { opacity: .3; pointer-events: none; }
 
-  /* Bottom sheet (preset list and questions) */
+  /* Bottom sheet (preset list, questions, settings) */
   .sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
   .sheet {
-    background: var(--card); border: 1px solid var(--line); border-radius: 20px 20px 0 0;
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px 18px 0 0;
     width: 100%; max-width: 640px; max-height: 85vh; overflow: auto;
     padding: 16px 16px calc(20px + env(safe-area-inset-bottom));
   }
   .sheet-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-  .sheet-head h3 { margin: 0; font-size: 18px; flex: 1; }
-  .sheet-head button { min-height: 40px; padding: 0 14px; }
-  .sheet p { color: var(--muted); font-size: 14px; line-height: 1.45; margin: 4px 0 12px; }
+  .sheet-head h3 { margin: 0; font-size: calc(var(--fs) + 2px); flex: 1; }
+  .sheet-head button { min-height: 38px; }
+  .sheet p { color: var(--muted); font-size: calc(var(--fs) - 2px); line-height: 1.45; margin: 4px 0 12px; }
   .preset-row {
     display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
-    min-height: 56px; margin-bottom: 6px; padding: 0 14px;
+    min-height: var(--ctl); margin-bottom: 6px; padding: 0 14px;
   }
-  .preset-row b { min-width: 28px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .preset-row b { min-width: 26px; font-variant-numeric: tabular-nums; color: var(--muted); }
   .preset-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .preset-row em { font-style: normal; font-size: 12px; color: var(--accent); }
-  .preset-row.current { border-color: var(--accent); }
+  .preset-row em { font-style: normal; font-size: 11px; letter-spacing: .08em; color: #f5a524; }
+  .preset-row.current { border-color: #f5a524; }
   .choice-list { display: grid; gap: 8px; }
+  .set-row { padding: 12px 0; border-top: 1px solid var(--line); }
+  .set-row:first-of-type { border-top: 0; }
+  .set-row .set-label { font-size: calc(var(--fs) - 1px); margin-bottom: 8px; }
+  .set-row .set-help { font-size: calc(var(--fs) - 3px); color: var(--muted); margin-top: 6px; line-height: 1.4; }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+  .seg button.on { border-color: #f5a524; color: #f5a524; background: rgba(245,165,36,.12); font-weight: 700; }
 
   /* Notice that pops up at the bottom */
   .notice {
     position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 15;
-    max-width: 616px; margin: 0 auto;
+    max-width: 616px; margin: 0 auto; font-size: calc(var(--fs) - 1px);
     background: #2a2110; border: 1px solid #6b4c17; border-radius: 14px; padding: 14px; line-height: 1.4;
     box-shadow: 0 8px 30px rgba(0,0,0,.5);
   }
   .notice.good { background: #12281b; border-color: #23573a; }
   .notice-actions { display: flex; gap: 8px; margin-top: 10px; }
-  .notice-actions button { flex: 1; min-height: 44px; }
+  .notice-actions button { flex: 1; }
 
   pre#log {
     white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.4;
     color: var(--muted); max-height: 300px; overflow: auto; margin: 8px 0;
+    -webkit-user-select: text; user-select: text;
   }
   .log-actions { display: flex; gap: 10px; }
-  .log-actions button { flex: 1; min-height: 40px; font-size: 14px; }
-  .footnote { color: var(--muted); font-size: 13px; line-height: 1.45; }
+  .log-actions button { flex: 1; }
+  .footnote { color: var(--muted); font-size: calc(var(--fs) - 3px); line-height: 1.45; }
 </style>
 </head>
-<body>
+<body data-size="m">
 
 <header>
-  <h1>Pedal Remote</h1>
+  <h1>Tonex Remote</h1>
   <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+  <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
 </header>
 
 <div class="banner warn hidden" id="noSupport">
-  This browser can't talk to USB devices. Use the Pedal Remote Android app, or Chrome/Edge on a laptop.
+  This browser can't talk to USB devices. Use the Tonex Remote Android app, or Chrome/Edge on a laptop.
 </div>
 
 <div class="banner info" id="connectHelp">
@@ -210,7 +254,7 @@
 
 <main id="app" class="locked">
 
-  <section class="card">
+  <section class="card plain">
     <div class="preset">
       <button class="preset-num" id="presetNum" aria-label="Choose preset">–<small>▾</small></button>
       <div class="preset-title" id="presetTitle">
@@ -220,19 +264,19 @@
     </div>
     <div class="preset-actions editable">
       <button id="saveBtn" disabled>Save</button>
-      <button id="undoBtn" disabled>Undo changes</button>
+      <button id="undoBtn" disabled>Undo</button>
       <button id="resetBtn" disabled>Reset</button>
     </div>
   </section>
 
-  <section class="card editable">
-    <div class="card-head"><h2>Blocks on / off</h2></div>
+  <section class="card plain editable">
+    <div class="card-head"><h2>Blocks</h2></div>
     <div class="toggles" id="toggles"></div>
   </section>
 
   <div id="sections"></div>
 
-  <section class="card">
+  <section class="card plain">
     <details>
       <summary class="footnote" style="cursor:pointer">Connection log (for troubleshooting)</summary>
       <pre id="log"></pre>
@@ -692,12 +736,15 @@ const state = {
   name: "",
   values: null,          // 109 numbers: what we believe the pedal has right now
   saved: null,           // 109 numbers: the last saved version of this preset
+  history: [],           // undo steps since the last save: [{ items: [{i, before, after}], t, merge }]
   names: loadJSON("pr.names", new Array(PRESET_COUNT).fill(null)),
   namesFetched: false,
   dragging: null,
   lastSendAt: 0,
   pedalReported: new Set(),   // params the pedal told us it changed itself (knob turns)
 };
+
+const settings = Object.assign({ size: "m", steps: true }, loadJSON("pr.settings", {}));
 
 const $ = (id) => document.getElementById(id);
 const logLines = [];
@@ -812,7 +859,7 @@ function onState(msg) {
   if (msg.preset !== state.preset || !state.values) {
     // the preset changed (footswitch, or our own preset change)
     state.preset = msg.preset;
-    state.values = null; state.saved = null;
+    state.values = null; state.saved = null; state.history = [];
     renderAll();
     queueRead(msg.preset, "load");
   }
@@ -836,6 +883,7 @@ function onPreset(msg) {
   state.values = msg.values.slice();
   if (purpose === "load" || !state.saved) {
     state.saved = msg.values.slice();
+    state.history = [];
     log(`Preset ${index + 1} "${state.name}" read (${msg.values.length} parameters)`);
     checkEarlierUnsaved();
   } else {
@@ -920,7 +968,7 @@ async function stopSession(quiet) {
   if (reads.busy) clearTimeout(reads.busy.timer);
   reads.busy = null; reads.queue = [];
   if (state.transport) { const t = state.transport; state.transport = null; await t.close(); }
-  state.connected = false; state.values = null; state.saved = null; state.preset = null; state.stateBody = null;
+  state.connected = false; state.values = null; state.saved = null; state.preset = null; state.stateBody = null; state.history = [];
   if (!quiet) {
     setStatus("Not connected", "");
     $("connectHelp").classList.remove("hidden");
@@ -976,7 +1024,7 @@ async function autoConnect() {
 }
 
 /* =====================================================================
-   5. EDITING, SAVE / UNDO, SWITCHING PRESETS
+   5. EDITING, UNDO / SAVE / RESET, SWITCHING PRESETS
    ===================================================================== */
 // While dragging we send at most every 150 ms; the final value is sent when you let go.
 const DRAG_SEND_MS = 150;
@@ -1004,6 +1052,32 @@ function flush() {
   persistUnsaved();
 }
 
+// A finished edit by you (slider released, button tapped). Each one is an undo step.
+// Quick repeated −/+ taps on the same control are merged into one step.
+function edit(index, value, before, merge = false) {
+  if (!state.values) return;
+  if (before === undefined) before = state.values[index];
+  setParam(index, value, { now: true });
+  if (same(before, value)) return;
+  const last = state.history[state.history.length - 1];
+  const now = Date.now();
+  if (merge && last && last.merge && last.items.length === 1 && last.items[0].i === index && now - last.t < 1500) {
+    last.items[0].after = value; last.t = now;
+    if (same(last.items[0].before, value)) state.history.pop();
+  } else {
+    state.history.push({ items: [{ i: index, before, after: value }], t: now, merge });
+  }
+  updateDirty();
+}
+
+function undoStep() {
+  const step = state.history.pop();
+  if (!step) return;
+  for (const it of [...step.items].reverse()) setParam(it.i, it.before, { now: true });
+  log(`Undo: ${step.items.map(it => `${PARAM_LABELS[it.i]} back to ${fmtNum(it.before)}`).join(", ")}`);
+  updateDirty();
+}
+
 function diffCount(a, b) {
   if (!a || !b) return 0;
   let n = 0;
@@ -1015,24 +1089,36 @@ const isDirty = () => diffCount(state.values, state.saved) > 0;
 function save() {
   if (!state.values) return;
   state.saved = state.values.slice();
+  state.history = [];
   persistUnsaved();
   updateDirty();
   log(`Saved preset ${state.preset + 1}`);
   showNotice("Saved ✓", [], "good", 1500);
 }
 
-async function undo() {
-  if (!state.values || !state.saved) return;
+// Put every setting back to the last saved version
+function resetToSaved() {
+  if (!state.values || !state.saved) return 0;
   let n = 0;
   for (let i = 0; i < PARAM_COUNT; i++) {
     if (!same(state.values[i], state.saved[i])) { setParam(i, state.saved[i], { now: true }); n++; }
   }
-  log(`Undo: put back ${n} setting(s)`);
-  renderAll();
+  state.history = [];
+  log(`Reset: put back ${n} setting(s) to the saved version`);
+  updateDirty();
+  return n;
+}
+async function askReset() {
+  if (!isDirty()) { showNotice("Nothing to reset — this preset matches its saved version.", [], "good", 1800); return; }
+  const answer = await ask("Reset this preset?", `Put every setting of ${state.name || "this preset"} back to how it was when last saved (${diffCount(state.values, state.saved)} setting(s) differ).`, [
+    { label: "Reset to saved", value: "reset", primary: true },
+    { label: "Cancel", value: "cancel" },
+  ]);
+  if (answer === "reset") resetToSaved();
 }
 
-function reset() {
-  log("Reset: re-reading the pedal");
+function reread() {
+  log("Re-reading the pedal");
   state.namesFetched = false;
   send(Proto.requestState(), "request state");
   if (state.preset !== null) queueRead(state.preset, state.values ? "refresh" : "load");
@@ -1058,7 +1144,7 @@ function checkEarlierUnsaved() {
   state.saved = rec.saved.slice();
   log(`Preset ${state.preset + 1} still has unsaved changes from earlier`);
   showNotice(`<b>${escapeHtml(state.name)}</b> still has changes you didn't save earlier.`, [
-    { label: "Undo them", primary: true, action: () => undo() },
+    { label: "Reset to saved", primary: true, action: () => resetToSaved() },
     { label: "Keep (save)", action: () => save() },
   ]);
 }
@@ -1066,22 +1152,22 @@ function checkEarlierUnsaved() {
 async function choosePreset(p) {
   closeSheet();
   if (p === state.preset) return;
-  if (!state.stateBody) { alert("The pedal hasn't sent its slot settings yet. Tap Reset and try again."); return; }
+  if (!state.stateBody) { alert("The pedal hasn't sent its slot settings yet. Use Settings → Re-read pedal and try again."); return; }
   if (isDirty()) {
     const answer = await ask(`Unsaved changes on ${state.name || "this preset"}`, "What should happen to them before switching?", [
       { label: "Save them", value: "save", primary: true },
-      { label: "Undo them", value: "undo" },
+      { label: "Reset them (put back saved)", value: "reset" },
       { label: "Cancel", value: "cancel" },
     ]);
     if (answer === "cancel" || answer === null) return;
-    if (answer === "save") save(); else await undo();
+    if (answer === "save") save(); else resetToSaved();
     await writeChain;
   }
   const body = Proto.withPresetInActiveSlot(state.stateBody, p);
   log(`Loading preset ${p + 1} into slot ${"ABC"[state.slotIndex]}`);
   state.stateBody = body;
   state.slots[state.slotIndex] = p;
-  state.preset = p; state.values = null; state.saved = null; state.name = state.names[p] || "";
+  state.preset = p; state.values = null; state.saved = null; state.history = []; state.name = state.names[p] || "";
   renderAll();
   await send(Proto.setState(body), "set state");
   queueRead(p, "load");
@@ -1104,9 +1190,8 @@ function renderAll() {
     : state.preset !== null ? `Loading ${state.names[state.preset] || "preset"}…`
     : state.connected ? "Reading pedal…" : "No preset loaded";
   $("presetSub").textContent = state.preset !== null
-    ? `Slot ${"ABC"[state.slotIndex]} · tap the number to choose another preset`
+    ? `Slot ${"ABC"[state.slotIndex]} · tap the number for other presets`
     : "Tap the number to choose another preset.";
-  $("resetBtn").disabled = !state.connected;
   for (const i of Object.keys(binders)) renderValue(Number(i));
   updateDirty();
 }
@@ -1115,20 +1200,22 @@ function updateDirty() {
   $("dirtyDot").classList.toggle("hidden", !dirty);
   $("saveBtn").disabled = !dirty;
   $("saveBtn").classList.toggle("primary", dirty);
-  $("undoBtn").disabled = !dirty;
-  const n = diffCount(state.values, state.saved);
-  $("undoBtn").textContent = n ? `Undo changes (${n})` : "Undo changes";
+  $("resetBtn").disabled = !state.values;
+  const n = state.history.length;
+  $("undoBtn").disabled = n === 0;
+  $("undoBtn").textContent = n ? `Undo (${n})` : "Undo";
 }
 
 const isOn = (v) => v !== null && v >= 0.5;
 const decimals = (step) => (String(step).split(".")[1] || "").length;
 
-function makeToggle(index, label, cls) {
+function makeToggle(index, label, cls, module) {
   const b = document.createElement("button");
-  b.className = cls; b.textContent = label;
+  b.className = cls + (module ? " m-" + module : "");
+  b.textContent = label;
   b.addEventListener("click", () => {
     if (!state.values) return;
-    setParam(index, isOn(state.values[index]) ? 0 : 1, { now: true });
+    edit(index, isOn(state.values[index]) ? 0 : 1);
   });
   bind(index, (v) => { b.classList.toggle("on", isOn(v)); b.setAttribute("aria-pressed", isOn(v)); });
   return b;
@@ -1138,12 +1225,12 @@ function makeToggle(index, label, cls) {
 let lastCabType = CAB_TONE_MODEL;
 function makeCabToggle() {
   const b = document.createElement("button");
-  b.className = "tog"; b.textContent = "Cab";
+  b.className = "tog m-cab"; b.textContent = "Cab";
   b.addEventListener("click", () => {
     if (!state.values) return;
     const t = Math.round(state.values[P.CAB_TYPE]);
-    if (t !== CAB_OFF) { lastCabType = t; setParam(P.CAB_TYPE, CAB_OFF, { now: true }); }
-    else setParam(P.CAB_TYPE, lastCabType, { now: true });
+    if (t !== CAB_OFF) { lastCabType = t; edit(P.CAB_TYPE, CAB_OFF); }
+    else edit(P.CAB_TYPE, lastCabType);
   });
   bind(P.CAB_TYPE, (v) => {
     const on = v !== null && Math.round(v) !== CAB_OFF;
@@ -1153,6 +1240,11 @@ function makeCabToggle() {
   return b;
 }
 
+/* Slider that never jumps to where you touch.
+   - A vertical swipe that starts on it just scrolls the page (touch-action: pan-y).
+   - It only starts moving once your finger has gone sideways a little, and then moves
+     relative to where you started (dragging the full width = the full range).
+   - Tapping the track does nothing. Use −/+ for single steps. */
 function makeSlider([index, label, min, max, step, unit, fmtFn]) {
   const wrap = document.createElement("div");
   wrap.className = "param";
@@ -1162,36 +1254,75 @@ function makeSlider([index, label, min, max, step, unit, fmtFn]) {
     <div class="param-top"><span class="param-label"></span><span class="param-val">–</span></div>
     <div class="param-row">
       <button class="step" aria-label="Less">−</button>
-      <input type="range">
+      <div class="slider" role="slider" tabindex="0"><div class="track"><div class="fill"></div></div><div class="thumb"></div></div>
       <button class="step" aria-label="More">+</button>
     </div>`;
   wrap.querySelector(".param-label").textContent = label;
   const valEl = wrap.querySelector(".param-val");
-  const range = wrap.querySelector("input");
+  const el = wrap.querySelector(".slider");
+  const fill = wrap.querySelector(".fill");
+  const thumb = wrap.querySelector(".thumb");
   const [minus, plus] = wrap.querySelectorAll(".step");
-  Object.assign(range, { min, max, step });
+  el.setAttribute("aria-label", label);
+  let lo = min, hi = max;
 
   const tidy = (v) => Number((Math.round(v / step) * step).toFixed(dp + 2));
-  range.addEventListener("pointerdown", () => state.dragging = index);
-  range.addEventListener("input", () => { const v = tidy(parseFloat(range.value)); setParam(index, v); valEl.textContent = fmt(v); });
-  // "change" fires when the finger lifts: send the final value straight away
-  range.addEventListener("change", () => { state.dragging = null; setParam(index, tidy(parseFloat(range.value)), { now: true }); });
-  range.addEventListener("pointercancel", () => state.dragging = null);
+  const clamp = (v) => Math.min(Math.max(v, lo), hi);
+  const draw = (v) => {
+    valEl.textContent = fmt(v);
+    if (v === null) return;
+    const f = (clamp(v) - lo) / (hi - lo);
+    fill.style.width = (f * 100) + "%";
+    thumb.style.left = `calc(10px + (100% - 20px) * ${f})`;
+    el.setAttribute("aria-valuenow", v);
+  };
+
+  let g = null;   // the gesture in progress
+  el.addEventListener("pointerdown", (e) => {
+    if (!state.values) return;
+    g = { id: e.pointerId, x: e.clientX, y: e.clientY, start: state.values[index], active: false, v: state.values[index] };
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.active) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { g = null; return; }    // it's a scroll
+      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) * 1.5) return;               // not decided yet
+      g.active = true; g.x = e.clientX;
+      try { el.setPointerCapture(e.pointerId); } catch (err) {}
+      el.classList.add("active");
+      state.dragging = index;
+      return;
+    }
+    const width = el.getBoundingClientRect().width - 20;
+    g.v = tidy(clamp(g.start + (e.clientX - g.x) / width * (hi - lo)));
+    if (!same(g.v, state.values[index])) setParam(index, g.v);
+    draw(g.v);
+  });
+  const end = (e) => {
+    if (!g || e.pointerId !== g.id) return;
+    const was = g; g = null;
+    el.classList.remove("active");
+    if (was.active) { state.dragging = null; edit(index, was.v, was.start); }
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", (e) => { if (g && g.active) end(e); else g = null; });
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { nudge(-1); e.preventDefault(); }
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") { nudge(1); e.preventDefault(); }
+  });
+
   const nudge = (dir) => {
     if (!state.values) return;
-    const v = tidy(Math.min(Math.max(state.values[index] + dir * step, Number(range.min)), Number(range.max)));
-    setParam(index, v, { now: true });
+    edit(index, tidy(clamp(state.values[index] + dir * step)), undefined, true);
   };
   minus.addEventListener("click", () => nudge(-1));
   plus.addEventListener("click", () => nudge(1));
 
   bind(index, (v) => {
-    valEl.textContent = fmt(v);
-    if (v === null) return;
     // If the pedal holds a value outside the range we expect, widen the slider instead of clamping it
-    if (v < Number(range.min)) range.min = v;
-    if (v > Number(range.max)) range.max = v;
-    if (state.dragging !== index) range.value = v;
+    if (v !== null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (state.dragging !== index) draw(v);
   });
   return wrap;
 }
@@ -1201,8 +1332,8 @@ function makeSwitchRow(index, label) {
   row.className = "row-switch";
   row.innerHTML = "<span></span>";
   row.firstChild.textContent = label;
-  row.appendChild(makeToggle(index, "OFF", "mini-tog"));
-  bind(index, (v) => { row.querySelector(".mini-tog").textContent = isOn(v) ? "ON" : "OFF"; });
+  row.appendChild(makeToggle(index, "OFF", "pill"));
+  bind(index, (v) => { row.querySelector(".pill").textContent = isOn(v) ? "ON" : "OFF"; });
   return row;
 }
 
@@ -1214,7 +1345,7 @@ function makeChips(index, labels, cols = 3) {
   labels.forEach((name, value) => {
     const b = document.createElement("button");
     b.className = "chip"; b.textContent = name;
-    b.addEventListener("click", () => setParam(index, value, { now: true }));
+    b.addEventListener("click", () => edit(index, value));
     box.appendChild(b);
   });
   bind(index, (v) => box.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", v !== null && Math.round(v) === i)));
@@ -1224,16 +1355,16 @@ function makeChips(index, labels, cols = 3) {
 function makeSubdivision(index) {
   const wrap = document.createElement("div");
   wrap.className = "param";
-  wrap.innerHTML = `<div class="param-top"><span class="param-label">Note value</span></div>`;
+  wrap.innerHTML = `<div class="param-top" style="margin-bottom:6px"><span class="param-label">Note value</span></div>`;
   const sel = document.createElement("select");
   SUBDIVISIONS.forEach((t, i) => { const o = document.createElement("option"); o.value = i; o.textContent = t; sel.appendChild(o); });
-  sel.addEventListener("change", () => setParam(index, Number(sel.value), { now: true }));
+  sel.addEventListener("change", () => edit(index, Number(sel.value)));
   wrap.appendChild(sel);
   bind(index, (v) => { if (v !== null) sel.value = String(Math.round(v)); });
   return wrap;
 }
 
-// One card section per model (reverb, mod, delay): model buttons, then that model's controls
+// One section per model (reverb, mod, delay): model buttons, then that model's controls
 function makeModelGroups(card, modelIndex, models) {
   card.appendChild(makeChips(modelIndex, models.map(m => m.name), 3));
   const groups = models.map(m => {
@@ -1256,16 +1387,16 @@ function makeModelGroups(card, modelIndex, models) {
   });
 }
 
-function makeCard(title, toggleIndex, opts = {}) {
+function makeCard(title, module, toggleIndex, opts = {}) {
   const card = document.createElement("section");
-  card.className = "card editable";
+  card.className = `card editable m-${module}`;
   const head = document.createElement("div");
   head.className = "card-head";
   head.innerHTML = "<h2></h2>";
   head.querySelector("h2").textContent = title;
   card.appendChild(head);
   if (toggleIndex !== undefined) {
-    const t = makeToggle(toggleIndex, "ON", "mini-tog");
+    const t = makeToggle(toggleIndex, "ON", "pill");
     head.appendChild(t);
     bind(toggleIndex, (v) => {
       t.textContent = isOn(v) ? "ON" : "OFF";
@@ -1280,21 +1411,21 @@ function makeCard(title, toggleIndex, opts = {}) {
 function buildUI() {
   // Block on/off grid
   const tg = $("toggles");
-  tg.appendChild(makeToggle(P.GATE_ON, "Gate", "tog"));
-  tg.appendChild(makeToggle(P.COMP_ON, "Comp", "tog"));
-  tg.appendChild(makeToggle(P.AMP_ON, "Amp", "tog"));
+  tg.appendChild(makeToggle(P.GATE_ON, "Gate", "tog", "gate"));
+  tg.appendChild(makeToggle(P.COMP_ON, "Comp", "tog", "comp"));
+  tg.appendChild(makeToggle(P.AMP_ON, "Amp", "tog", "amp"));
   tg.appendChild(makeCabToggle());
-  tg.appendChild(makeToggle(P.MOD_ON, "Mod", "tog"));
-  tg.appendChild(makeToggle(P.DELAY_ON, "Delay", "tog"));
-  tg.appendChild(makeToggle(P.REVERB_ON, "Reverb", "tog"));
+  tg.appendChild(makeToggle(P.MOD_ON, "Mod", "tog", "mod"));
+  tg.appendChild(makeToggle(P.DELAY_ON, "Delay", "tog", "delay"));
+  tg.appendChild(makeToggle(P.REVERB_ON, "Reverb", "tog", "reverb"));
 
   // Amp
-  let c = makeCard("Amp", P.AMP_ON);
+  let c = makeCard("Amp", "amp", P.AMP_ON);
   for (const s of [[P.AMP_GAIN, "Gain", 0, 10, 0.1, ""], [P.AMP_VOLUME, "Model volume", 0, 10, 0.1, ""], [P.AMP_MIX, "Model mix", 0, 100, 1, "%"],
                    [P.AMP_PRESENCE, "Presence", 0, 10, 0.1, ""], [P.AMP_DEPTH, "Depth", 0, 10, 0.1, ""]]) c.appendChild(makeSlider(s));
 
   // EQ
-  c = makeCard("EQ");
+  c = makeCard("EQ", "eq");
   for (const s of [[P.EQ_BASS, "Bass", 0, 10, 0.1, ""], [P.EQ_MID, "Mid", 0, 10, 0.1, ""], [P.EQ_TREBLE, "Treble", 0, 10, 0.1, ""]]) c.appendChild(makeSlider(s));
   const adv = document.createElement("details");
   adv.className = "adv";
@@ -1304,46 +1435,48 @@ function buildUI() {
   c.appendChild(adv);
 
   // Cab
-  c = makeCard("Cab");
+  c = makeCard("Cab", "cab");
   c.appendChild(makeChips(P.CAB_TYPE, ["Tone Model", "VIR", "Off"], 3));
   const vir = document.createElement("div");
   vir.appendChild(makeSlider([P.VIR_CAB, "VIR cabinet", 0, 10, 1, "", v => `#${Math.round(v) + 1}`]));
   const mics = ["Condenser", "Dynamic", "Ribbon"];
   const m1 = document.createElement("div"); m1.className = "sub-label"; m1.textContent = "Mic 1";
   vir.appendChild(m1); vir.appendChild(makeChips(P.VIR_MIC1, mics));
-  vir.appendChild(makeSlider([P.VIR_MIC1_X, "Mic 1 position (X)", 0, 10, 0.1, ""]));
-  vir.appendChild(makeSlider([P.VIR_MIC1_Z, "Mic 1 distance (Z)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC1_X, "Position (X)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC1_Z, "Distance (Z)", 0, 10, 0.1, ""]));
   const m2 = document.createElement("div"); m2.className = "sub-label"; m2.textContent = "Mic 2";
   vir.appendChild(m2); vir.appendChild(makeChips(P.VIR_MIC2, mics));
-  vir.appendChild(makeSlider([P.VIR_MIC2_X, "Mic 2 position (X)", 0, 10, 0.1, ""]));
-  vir.appendChild(makeSlider([P.VIR_MIC2_Z, "Mic 2 distance (Z)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC2_X, "Position (X)", 0, 10, 0.1, ""]));
+  vir.appendChild(makeSlider([P.VIR_MIC2_Z, "Distance (Z)", 0, 10, 0.1, ""]));
+  const mx = document.createElement("div"); mx.className = "sub-label"; mx.textContent = "Mix";
+  vir.appendChild(mx);
   vir.appendChild(makeSlider([P.VIR_BLEND, "Mic blend", -100, 100, 1, ""]));
   vir.appendChild(makeSlider([P.VIR_RESO, "Resonance", 0, 10, 0.1, ""]));
   c.appendChild(vir);
   bind(P.CAB_TYPE, (v) => vir.classList.toggle("hidden", v === null || Math.round(v) !== CAB_VIR));
 
   // Compressor
-  c = makeCard("Compressor", P.COMP_ON);
+  c = makeCard("Compressor", "comp", P.COMP_ON);
   for (const s of [[P.COMP_THRESH, "Threshold", -40, 0, 0.5, "dB"], [P.COMP_MAKEUP, "Make-up gain", -30, 10, 0.5, "dB"],
                    [P.COMP_ATTACK, "Attack", 1, 51, 1, "ms"]]) c.appendChild(makeSlider(s));
 
   // Reverb
-  c = makeCard("Reverb", P.REVERB_ON);
+  c = makeCard("Reverb", "reverb", P.REVERB_ON);
   makeModelGroups(c, P.REVERB_MODEL, REVERB_MODELS);
 
   // Shown only while the block is on
-  c = makeCard("Noise gate", P.GATE_ON, { hideWhenOff: true });
+  c = makeCard("Noise gate", "gate", P.GATE_ON, { hideWhenOff: true });
   for (const s of [[P.GATE_THRESH, "Threshold", -100, 0, 1, "dB"], [P.GATE_RELEASE, "Release", 5, 500, 1, "ms"],
                    [P.GATE_DEPTH, "Depth", -100, -20, 1, "dB"]]) c.appendChild(makeSlider(s));
 
-  c = makeCard("Modulation", P.MOD_ON, { hideWhenOff: true });
+  c = makeCard("Modulation", "mod", P.MOD_ON, { hideWhenOff: true });
   makeModelGroups(c, P.MOD_MODEL, MOD_MODELS);
 
-  c = makeCard("Delay", P.DELAY_ON, { hideWhenOff: true });
+  c = makeCard("Delay", "delay", P.DELAY_ON, { hideWhenOff: true });
   makeModelGroups(c, P.DELAY_MODEL, DELAY_MODELS);
 }
 
-/* ---- bottom sheet: preset list and questions ---- */
+/* ---- bottom sheet: preset list, questions, settings ---- */
 let sheetMode = null, sheetResolve = null;
 function openSheet(title, mode) {
   sheetMode = mode;
@@ -1394,6 +1527,43 @@ function ask(title, text, choices) {
   });
 }
 
+function applySettings() {
+  document.body.dataset.size = settings.size;
+  document.body.classList.toggle("no-steps", !settings.steps);
+}
+function openSettings() {
+  openSheet("Settings", "settings");
+  const body = $("sheetBody");
+  body.innerHTML = `
+    <div class="set-row">
+      <div class="set-label">Size</div>
+      <div class="seg" id="setSize"></div>
+    </div>
+    <div class="set-row">
+      <div class="set-label">Fine-tune − / + buttons</div>
+      <div class="seg" id="setSteps"></div>
+      <div class="set-help">Next to each slider, for exact single steps. Quick taps on the same control count as one undo step.</div>
+    </div>
+    <div class="set-row">
+      <div class="set-label">Pedal</div>
+      <button id="setReread" style="width:100%">Re-read pedal</button>
+      <div class="set-help">Reloads the preset list and the current preset from the pedal. Doesn't change anything on it.</div>
+    </div>`;
+  const seg = (host, options, current, onPick) => {
+    for (const [value, label] of options) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.classList.toggle("on", value === current);
+      b.addEventListener("click", () => { onPick(value); saveJSON("pr.settings", settings); applySettings(); openSettings(); });
+      $(host).appendChild(b);
+    }
+  };
+  seg("setSize", [["s", "Small"], ["m", "Medium"], ["l", "Large"]], settings.size, v => settings.size = v);
+  seg("setSteps", [[true, "Show"], [false, "Hide"]], settings.steps, v => settings.steps = v);
+  $("setReread").disabled = !state.connected;
+  $("setReread").addEventListener("click", () => { closeSheet(); reread(); });
+}
+
 /* ---- notice at the bottom ---- */
 let noticeTimer = null;
 function showNotice(html, actions, kind, autoHideMs) {
@@ -1417,6 +1587,7 @@ function hideNotice() { $("notice").classList.add("hidden"); }
 /* =====================================================================
    7. START
    ===================================================================== */
+applySettings();
 buildUI();
 renderAll();
 
@@ -1424,15 +1595,13 @@ const supported = !!window.AndroidUsb || ("usb" in navigator) || ("serial" in na
 if (!supported) { $("noSupport").classList.remove("hidden"); $("connectBtn").disabled = true; }
 if (location.search.includes("demo")) $("connectBtn").textContent = "Connect (demo pedal)";
 
-// if a finger lifts somewhere the slider didn't notice, stop treating it as "still dragging"
-window.addEventListener("pointerup", () => setTimeout(() => { state.dragging = null; }, 50));
-
 $("connectBtn").addEventListener("click", connect);
 $("presetNum").addEventListener("click", openPresetList);
 $("presetTitle").addEventListener("click", openPresetList);
+$("settingsBtn").addEventListener("click", openSettings);
 $("saveBtn").addEventListener("click", save);
-$("undoBtn").addEventListener("click", () => undo());
-$("resetBtn").addEventListener("click", reset);
+$("undoBtn").addEventListener("click", undoStep);
+$("resetBtn").addEventListener("click", askReset);
 $("sheetClose").addEventListener("click", closeSheet);
 $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) closeSheet(); });
 $("disconnectBtn").addEventListener("click", () => stopSession());
