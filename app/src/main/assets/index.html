@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e0f12">
+<title>Pedal Remote</title>
+<!--
+  Pedal Remote — edit the current preset on a ToneX One from a phone over USB.
+
+  How it talks to the pedal:
+  - The ToneX One shows up as a USB serial device (CDC). On Android Chrome we use WebUSB;
+    on a laptop (Chrome/Edge) we use Web Serial.
+  - Messages are HDLC-framed (0x7E start/end, 0x7D escaping, CRC-16 at the end).
+  - Protocol knowledge comes from the open-source TonexOneController project by Greg Smith
+    (Apache 2.0) and vit3k/tonex_controller. https://github.com/Builty/TonexOneController
+
+  What this page sends to the pedal (and nothing else):
+  - "hello", "request state", "request preset details" (read-only requests)
+  - "set single parameter" (one knob/switch of the current preset at a time)
+  It never sends the pedal's global state block, so it can't overwrite slots, colours or globals.
+-->
+<style>
+  :root {
+    --bg: #0e0f12;
+    --card: #17191e;
+    --card-2: #1e2127;
+    --line: #2a2e36;
+    --text: #eceef2;
+    --muted: #8d93a0;
+    --accent: #f5a524;
+    --accent-dim: #5a4520;
+    --ok: #3ccf7a;
+    --bad: #ff5d5d;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    padding: 0 16px calc(32px + env(safe-area-inset-bottom));
+    max-width: 640px; margin: 0 auto;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: calc(12px + env(safe-area-inset-top)) 0 12px;
+    background: var(--bg);
+  }
+  header h1 { font-size: 18px; margin: 0; flex: 1; letter-spacing: .02em; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .status.on .dot { background: var(--ok); }
+  .status.busy .dot { background: var(--accent); }
+
+  button {
+    font: inherit; color: var(--text); background: var(--card-2);
+    border: 1px solid var(--line); border-radius: 12px;
+    min-height: 48px; padding: 0 16px; cursor: pointer;
+  }
+  button:active { transform: scale(.98); }
+  button.primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 700; }
+  button:disabled { opacity: .4; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--muted); margin: 0; flex: 1;
+  }
+  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; min-height: 40px; }
+
+  .banner { padding: 14px 16px; border-radius: 12px; margin-bottom: 14px; line-height: 1.4; font-size: 15px; }
+  .banner.warn { background: #3a2a10; border: 1px solid #6b4c17; }
+  .banner.info { background: #142330; border: 1px solid #23415a; }
+  .hidden { display: none !important; }
+
+  /* Preset header */
+  .preset { display: flex; align-items: center; gap: 14px; }
+  .preset-num {
+    font-size: 28px; font-weight: 800; min-width: 56px; height: 56px;
+    display: grid; place-items: center; border-radius: 12px;
+    background: var(--card-2); border: 1px solid var(--line);
+  }
+  .preset-name { font-size: 20px; font-weight: 700; line-height: 1.2; word-break: break-word; }
+  .preset-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .preset-actions { display: flex; gap: 10px; margin-top: 14px; }
+  .preset-actions button { flex: 1; }
+
+  /* Block on/off buttons */
+  .toggles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .tog {
+    min-height: 64px; border-radius: 14px; font-weight: 700; font-size: 15px;
+    background: var(--card-2); color: var(--muted); border: 2px solid var(--line);
+  }
+  .tog.on { background: var(--accent); color: #1a1205; border-color: var(--accent); }
+  .mini-tog {
+    min-height: 40px; min-width: 64px; padding: 0 12px; border-radius: 999px;
+    font-size: 13px; font-weight: 800; letter-spacing: .06em;
+    background: var(--card-2); color: var(--muted); border: 2px solid var(--line);
+  }
+  .mini-tog.on { background: var(--accent); color: #1a1205; border-color: var(--accent); }
+
+  /* Sliders */
+  .param { padding: 10px 0; border-top: 1px solid var(--line); }
+  .param:first-of-type { border-top: 0; }
+  .param-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .param-label { font-size: 15px; }
+  .param-val { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+  .param-row { display: flex; align-items: center; gap: 10px; }
+  .step { min-width: 44px; min-height: 44px; padding: 0; font-size: 22px; line-height: 1; border-radius: 10px; }
+  input[type=range] { -webkit-appearance: none; appearance: none; flex: 1; height: 44px; background: transparent; margin: 0; }
+  input[type=range]::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: var(--line); }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 28px; height: 28px; margin-top: -10px;
+    border-radius: 50%; background: var(--accent); border: 3px solid var(--bg);
+  }
+  input[type=range]::-moz-range-track { height: 8px; border-radius: 4px; background: var(--line); }
+  input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg); }
+
+  .block-off .param { opacity: .45; }
+
+  details.adv { margin-top: 6px; }
+  details.adv > summary {
+    list-style: none; cursor: pointer; padding: 12px 0; color: var(--muted);
+    font-size: 14px; border-top: 1px solid var(--line);
+  }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv > summary::before { content: "▸ "; }
+  details.adv[open] > summary::before { content: "▾ "; }
+
+  .models { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .model { min-height: 44px; font-size: 14px; padding: 0 6px; }
+  .model.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
+  /* Locked until a preset has been read */
+  main.locked .editable { opacity: .35; pointer-events: none; }
+
+  pre#log {
+    white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.4;
+    color: var(--muted); max-height: 260px; overflow: auto; margin: 8px 0;
+  }
+  .log-actions { display: flex; gap: 10px; }
+  .log-actions button { flex: 1; min-height: 40px; font-size: 14px; }
+  .footnote { color: var(--muted); font-size: 13px; line-height: 1.45; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Pedal Remote</h1>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">Not connected</span></div>
+</header>
+
+<div class="banner warn hidden" id="noSupport">
+  This browser can't talk to USB devices. Open this page in <b>Chrome on Android</b>
+  (or Chrome/Edge on a laptop). iPhone/iPad Safari can't do it.
+</div>
+
+<div class="banner info" id="connectHelp">
+  Plug the ToneX One into the phone with a USB-C cable, then tap <b>Connect</b> and pick the pedal.
+  <div style="margin-top:12px"><button class="primary" id="connectBtn" style="width:100%">Connect</button></div>
+</div>
+
+<main id="app" class="locked">
+
+  <section class="card">
+    <div class="preset">
+      <div class="preset-num" id="presetNum">–</div>
+      <div style="flex:1">
+        <div class="preset-name" id="presetName">No preset loaded</div>
+        <div class="preset-sub" id="presetSub">Changes go to the pedal instantly and the pedal keeps them.</div>
+      </div>
+    </div>
+    <div class="preset-actions">
+      <button id="refreshBtn" disabled>↻ Re-read</button>
+      <button id="revertBtn" disabled>Undo changes</button>
+    </div>
+  </section>
+
+  <section class="card editable">
+    <div class="card-head"><h2>Blocks on / off</h2></div>
+    <div class="toggles" id="toggles"></div>
+  </section>
+
+  <div id="sections"></div>
+
+  <section class="card">
+    <details>
+      <summary class="footnote" style="cursor:pointer">Connection log (for troubleshooting)</summary>
+      <pre id="log"></pre>
+      <div class="log-actions">
+        <button id="copyLogBtn">Copy log</button>
+        <button id="disconnectBtn">Disconnect</button>
+      </div>
+    </details>
+  </section>
+
+  <p class="footnote">
+    Unofficial tool, not made or endorsed by IK Multimedia. Protocol from the open-source
+    TonexOneController project (Greg Smith, Apache 2.0). Back up your presets in ToneX Editor before first use.
+  </p>
+</main>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   1. PARAMETER MAP (order and ranges from TonexOneController tonex_params.c)
+   The pedal sends 109 numbers per preset, always in this order.
+   Only the ones this page shows are listed here by index.
+   ===================================================================== */
+const PARAM_COUNT = 109;
+
+const P = {
+  GATE_ON: 1,
+  COMP_ON: 6, COMP_THRESH: 7, COMP_MAKEUP: 8, COMP_ATTACK: 9,
+  EQ_BASS: 11, EQ_BASS_FREQ: 12, EQ_MID: 13, EQ_MID_Q: 14, EQ_MID_FREQ: 15, EQ_TREBLE: 16, EQ_TREBLE_FREQ: 17,
+  AMP_ON: 18, AMP_GAIN: 20, AMP_VOLUME: 21, AMP_MIX: 22, AMP_PRESENCE: 34, AMP_DEPTH: 35,
+  REVERB_ON: 37, REVERB_MODEL: 38,       // each reverb model has 4 params starting at 39
+  MOD_ON: 64,
+  DELAY_ON: 95,
+};
+
+const REVERB_MODELS = ["Spring 1", "Spring 2", "Spring 3", "Spring 4", "Room", "Plate"];
+// for model m: time = 39 + m*4, pre-delay = +1, colour = +2, mix = +3
+const reverbParam = (model, which) => 39 + model * 4 + which;
+
+// [index, label, min, max, step, unit]
+const SECTIONS = [
+  {
+    title: "Amp", toggle: P.AMP_ON,
+    sliders: [
+      [P.AMP_GAIN, "Gain", 0, 10, 0.1, ""],
+      [P.AMP_VOLUME, "Model volume", 0, 10, 0.1, ""],
+      [P.AMP_MIX, "Model mix", 0, 100, 1, "%"],
+      [P.AMP_PRESENCE, "Presence", 0, 10, 0.1, ""],
+      [P.AMP_DEPTH, "Depth", 0, 10, 0.1, ""],
+    ],
+  },
+  {
+    title: "EQ",
+    sliders: [
+      [P.EQ_BASS, "Bass", 0, 10, 0.1, ""],
+      [P.EQ_MID, "Mid", 0, 10, 0.1, ""],
+      [P.EQ_TREBLE, "Treble", 0, 10, 0.1, ""],
+    ],
+    advanced: [
+      [P.EQ_BASS_FREQ, "Bass frequency", 75, 600, 5, "Hz"],
+      [P.EQ_MID_FREQ, "Mid frequency", 150, 5000, 10, "Hz"],
+      [P.EQ_MID_Q, "Mid Q (width)", 0.2, 3, 0.05, ""],
+      [P.EQ_TREBLE_FREQ, "Treble frequency", 1000, 4000, 10, "Hz"],
+    ],
+  },
+  {
+    title: "Compressor", toggle: P.COMP_ON,
+    sliders: [
+      [P.COMP_THRESH, "Threshold", -40, 0, 0.5, "dB"],
+      [P.COMP_MAKEUP, "Make-up gain", -30, 10, 0.5, "dB"],
+      [P.COMP_ATTACK, "Attack", 1, 51, 1, "ms"],
+    ],
+  },
+  { title: "Reverb", toggle: P.REVERB_ON, reverb: true },
+];
+
+const BLOCK_TOGGLES = [
+  [P.GATE_ON, "Gate"], [P.COMP_ON, "Comp"], [P.AMP_ON, "Amp"],
+  [P.MOD_ON, "Mod"], [P.DELAY_ON, "Delay"], [P.REVERB_ON, "Reverb"],
+];
+
+/* =====================================================================
+   2. PROTOCOL: framing, CRC, building and reading messages
+   (kept free of UI code so it can be tested on its own)
+   ===================================================================== */
+const Proto = (() => {
+  const FLAG = 0x7E, ESC = 0x7D;
+
+  // CRC-16/X-25 style: init 0xFFFF, reversed poly 0x8408, final invert
+  function crc16(bytes) {
+    let crc = 0xFFFF;
+    for (const b of bytes) {
+      crc ^= b;
+      for (let i = 0; i < 8; i++) crc = (crc & 1) ? ((crc >>> 1) ^ 0x8408) : (crc >>> 1);
+    }
+    return (~crc) & 0xFFFF;
+  }
+
+  function stuff(out, b) {
+    if (b === FLAG || b === ESC) out.push(ESC, b ^ 0x20); else out.push(b);
+  }
+
+  // Wrap a payload: 7E + payload + CRC (low, high) + 7E, with escaping
+  function frame(payload) {
+    const out = [FLAG];
+    for (const b of payload) stuff(out, b);
+    const crc = crc16(payload);
+    stuff(out, crc & 0xFF);
+    stuff(out, (crc >> 8) & 0xFF);
+    out.push(FLAG);
+    return Uint8Array.from(out);
+  }
+
+  // Read one number in the pedal's format: 0x80 xx, 0x81/0x82 lo hi, or a plain byte
+  function readNum(buf, i) {
+    const t = buf[i];
+    if (t === 0x81 || t === 0x82) return [buf[i + 1] | (buf[i + 2] << 8), i + 3];
+    if (t === 0x80) return [buf[i + 1], i + 2];
+    return [t, i + 1];
+  }
+
+  function floatBytes(value) {
+    const dv = new DataView(new ArrayBuffer(4));
+    dv.setFloat32(0, value, true);
+    return [dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)];
+  }
+  function readFloat(buf, i) {
+    return new DataView(buf.buffer, buf.byteOffset + i, 4).getFloat32(0, true);
+  }
+
+  function indexOf(buf, pattern, from = 0) {
+    outer: for (let i = from; i <= buf.length - pattern.length; i++) {
+      for (let j = 0; j < pattern.length; j++) if (buf[i + j] !== pattern[j]) continue outer;
+      return i;
+    }
+    return -1;
+  }
+
+  // ---- messages we send ----
+  const hello = () => frame([0xb9, 0x03, 0x00, 0x82, 0x04, 0x00, 0x80, 0x0b, 0x01, 0xb9, 0x02, 0x02, 0x0b]);
+  const requestState = () => frame([0xb9, 0x03, 0x00, 0x82, 0x06, 0x00, 0x80, 0x0b, 0x03, 0xb9, 0x02, 0x81, 0x06, 0x03, 0x0b]);
+  const requestPreset = (preset) =>
+    frame([0xb9, 0x03, 0x81, 0x00, 0x03, 0x82, 0x06, 0x00, 0x80, 0x0b, 0x03, 0xb9, 0x04, 0x0b, 0x01, preset & 0x7F, 0x00]);
+  const setParam = (index, value) =>
+    frame([0xb9, 0x03, 0x81, 0x09, 0x03, 0x82, 0x0a, 0x00, 0x80, 0x0b, 0x03,
+           0xb9, 0x04, 0x02, 0x00, index & 0x7F, 0x88, ...floatBytes(value)]);
+
+  // ---- reading what the pedal sends ----
+  const TYPE = { HELLO: 0x02, STATE: 0x0306, PRESET: 0x0304, PRESET_FULL: 0x0303, PARAM: 0x0309 };
+  const NAME_MARKER = [0xB9, 0x04, 0xB9, 0x02, 0xBC, 0x21];
+  const PARAMS_MARKER = [0xBA, 0x03, 0xBA, PARAM_COUNT];
+
+  // Decode an unescaped frame body (everything between the 7E flags). Returns a message object or {error}.
+  function decode(raw) {
+    if (raw.length < 4) return { error: "frame too short" };
+    const data = raw.subarray(0, raw.length - 2);
+    const crcGot = raw[raw.length - 2] | (raw[raw.length - 1] << 8);
+    if (crc16(data) !== crcGot) return { error: "CRC mismatch" };
+    if (data[0] !== 0xB9 || data[1] !== 0x03) return { error: "bad header" };
+
+    let i = 2, type, size;
+    [type, i] = readNum(data, i);
+    [size, i] = readNum(data, i);
+    [, i] = readNum(data, i);   // unknown field
+    const body = data.subarray(i);
+    const msg = { type, size, body, sizeOk: body.length === size };
+
+    if (type === TYPE.STATE && body.length >= 18) {
+      const L = body.length;
+      msg.slots = [body[L - 18], body[L - 16], body[L - 14]];  // A, B, C
+      msg.slot = body[L - 11];                                  // 0 = A, 1 = B, else C
+      msg.preset = msg.slots[msg.slot <= 1 ? msg.slot : 2];
+    }
+
+    if (type === TYPE.PRESET) {
+      const n = indexOf(body, NAME_MARKER);
+      if (n >= 0) {
+        const bytes = body.subarray(n + NAME_MARKER.length, n + NAME_MARKER.length + 32);
+        const end = bytes.indexOf(0);
+        msg.name = new TextDecoder().decode(end >= 0 ? bytes.subarray(0, end) : bytes).trim();
+      }
+      const p = indexOf(body, PARAMS_MARKER);
+      if (p >= 0) {
+        let j = p + PARAMS_MARKER.length;
+        const values = [];
+        for (let k = 0; k < PARAM_COUNT; k++) {
+          if (body[j] !== 0x88) break;
+          values.push(readFloat(body, j + 1));
+          j += 5;
+        }
+        if (values.length === PARAM_COUNT) msg.values = values;
+      }
+    }
+
+    if (type === TYPE.PARAM) {
+      // B9 04 02 <n> <n> 88 <float>  (02 = preset parameter; 03 would be a global)
+      const k = indexOf(body, [0xB9, 0x04, 0x02]);
+      if (k >= 0) {
+        let j = k + 3, a, b;
+        [a, j] = readNum(body, j);
+        [b, j] = readNum(body, j);
+        if (body[j] === 0x88) {
+          msg.paramIndex = (a === 0) ? b : a;
+          msg.paramValue = readFloat(body, j + 1);
+        }
+      }
+    }
+    return msg;
+  }
+
+  // Splits an incoming byte stream into frames (handles messages split across USB packets)
+  class Deframer {
+    constructor(onFrame) { this.onFrame = onFrame; this.buf = []; this.esc = false; }
+    push(bytes) {
+      for (const b of bytes) {
+        if (b === FLAG) {
+          if (this.buf.length) this.onFrame(Uint8Array.from(this.buf));
+          this.buf = []; this.esc = false;
+        } else if (b === ESC) {
+          this.esc = true;
+        } else {
+          this.buf.push(this.esc ? (b ^ 0x20) : b);
+          this.esc = false;
+          if (this.buf.length > 65536) this.buf = [];  // runaway guard
+        }
+      }
+    }
+  }
+
+  return { crc16, frame, hello, requestState, requestPreset, setParam, decode, Deframer, TYPE, floatBytes, readNum };
+})();
+
+/* =====================================================================
+   3. TRANSPORTS: WebUSB (Android) and Web Serial (laptop)
+   ===================================================================== */
+const VENDOR_ID = 0x1963;   // IK Multimedia
+const TONEX_ONE_PID = 0x00D1;
+
+class UsbTransport {
+  constructor(device) { this.device = device; this.running = false; }
+  async open(onData, onClose) {
+    const d = this.device;
+    await d.open();
+    if (!d.configuration) await d.selectConfiguration(1);
+
+    // Find the CDC control (class 2) and data (class 10) interfaces
+    let comm = null, data = null, epIn = null, epOut = null;
+    for (const itf of d.configuration.interfaces) {
+      const alt = itf.alternate || itf.alternates[0];
+      if (alt.interfaceClass === 0x02 && comm === null) comm = itf.interfaceNumber;
+      const bulkIn = alt.endpoints.find(e => e.type === "bulk" && e.direction === "in");
+      const bulkOut = alt.endpoints.find(e => e.type === "bulk" && e.direction === "out");
+      if (bulkIn && bulkOut && (data === null || alt.interfaceClass === 0x0A)) {
+        data = itf.interfaceNumber; epIn = bulkIn.endpointNumber; epOut = bulkOut.endpointNumber;
+      }
+    }
+    if (data === null) throw new Error("Couldn't find the pedal's data connection (no bulk endpoints).");
+    log(`USB: control interface ${comm}, data interface ${data}, endpoints in ${epIn} / out ${epOut}`);
+
+    await d.claimInterface(data);
+    if (comm !== null && comm !== data) {
+      try {
+        await d.claimInterface(comm);
+        // 115200 baud, 1 stop bit, no parity, 8 bits (the pedal ignores it, but it's what the editor does)
+        await d.controlTransferOut({ requestType: "class", recipient: "interface", request: 0x20, value: 0, index: comm },
+          Uint8Array.from([0x00, 0xC2, 0x01, 0x00, 0x00, 0x00, 0x08]));
+        // DTR + RTS on
+        await d.controlTransferOut({ requestType: "class", recipient: "interface", request: 0x22, value: 0x03, index: comm });
+      } catch (e) {
+        log("Note: couldn't set line options (" + e.message + "). Carrying on.");
+      }
+    }
+    this.epIn = epIn; this.epOut = epOut; this.running = true;
+
+    (async () => {
+      try {
+        while (this.running) {
+          const r = await d.transferIn(epIn, 8192);
+          if (r.data && r.data.byteLength) onData(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength));
+        }
+      } catch (e) {
+        if (this.running) { this.running = false; onClose(e); }
+      }
+    })();
+  }
+  async write(bytes) { await this.device.transferOut(this.epOut, bytes); }
+  async close() { this.running = false; try { await this.device.close(); } catch (e) {} }
+}
+
+class SerialTransport {
+  constructor(port) { this.port = port; this.running = false; }
+  async open(onData, onClose) {
+    await this.port.open({ baudRate: 115200, bufferSize: 16384 });
+    try { await this.port.setSignals({ dataTerminalReady: true, requestToSend: true }); } catch (e) {}
+    this.running = true;
+    (async () => {
+      try {
+        while (this.running && this.port.readable) {
+          this.reader = this.port.readable.getReader();
+          try {
+            while (true) {
+              const { value, done } = await this.reader.read();
+              if (done) break;
+              if (value) onData(value);
+            }
+          } finally { this.reader.releaseLock(); }
+        }
+      } catch (e) {
+        if (this.running) { this.running = false; onClose(e); }
+      }
+    })();
+  }
+  async write(bytes) {
+    const w = this.port.writable.getWriter();
+    try { await w.write(bytes); } finally { w.releaseLock(); }
+  }
+  async close() {
+    this.running = false;
+    try { if (this.reader) await this.reader.cancel(); } catch (e) {}
+    try { await this.port.close(); } catch (e) {}
+  }
+}
+
+/* Inside the Android app (window.AndroidUsb exists): the app does the USB work natively,
+   because many phones won't let Chrome take the pedal from the system's serial driver.
+   The app calls back into window.__usbEvent(type, message) and window.__usbData(base64). */
+const bytesToB64 = (bytes) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
+const b64ToBytes = (b64) => { const s = atob(b64); const out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; };
+const androidHandlers = { data: null, event: null };
+window.__usbData = (b64) => { if (androidHandlers.data) androidHandlers.data(b64); };
+window.__usbEvent = (type, msg) => {
+  if (type === "log") return log(msg);
+  if (type === "attached") return autoConnect();
+  if (androidHandlers.event) androidHandlers.event(type, msg);
+};
+
+class AndroidTransport {
+  constructor() { this.running = false; }
+  open(onData, onClose) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { if (!this.running) reject(new Error("The pedal didn't respond to the app (timed out).")); }, 30000);
+      androidHandlers.data = (b64) => { if (this.running) onData(b64ToBytes(b64)); };
+      androidHandlers.event = (type, msg) => {
+        if (type === "opened") { this.running = true; clearTimeout(timer); log(`App opened ${msg}`); resolve(); }
+        else if (type === "error") { if (this.running) log("USB: " + msg); else { clearTimeout(timer); reject(new Error(msg)); } }
+        else if (type === "closed") { if (this.running) { this.running = false; onClose(new Error("pedal unplugged")); } }
+      };
+      window.AndroidUsb.open();
+    });
+  }
+  async write(bytes) {
+    if (!window.AndroidUsb.write(bytesToB64(bytes))) throw new Error("USB write failed");
+  }
+  async close() { this.running = false; window.AndroidUsb.close(); }
+}
+
+/* Demo mode (add ?demo to the address): a pretend pedal, for trying the screen without hardware.
+   It answers with real, framed messages so the same reading code is exercised. */
+class DemoTransport {
+  constructor() {
+    this.values = [0,1,-64,20,-60, 1,0,-14,-6,14, 0,5,300,5,0.7,750,5,1900, 1,0,5.5,5,100,1,0,
+      5,0,0,0,0,0,0,0,0, 5,5, 1,1,4, 5,0,0,30, 5,0,0,30, 5,0,0,30, 5,0,0,30, 3.5,20,0,22, 5,0,0,30];
+    while (this.values.length < PARAM_COUNT) this.values.push(0);
+    this.values[P.DELAY_ON] = 0; this.values[P.MOD_ON] = 0;
+  }
+  async open(onData) { this.onData = onData; }
+  reply(type, body) {
+    const t = [0x81, type & 0xFF, type >> 8];
+    const s = [0x82, body.length & 0xFF, body.length >> 8];
+    const payload = [0xb9, 0x03, ...t, ...s, 0x02, ...body];
+    const framed = Proto.frame(payload);
+    // deliver in 64-byte chunks like real USB
+    setTimeout(() => { for (let i = 0; i < framed.length; i += 64) this.onData(framed.subarray(i, i + 64)); }, 60);
+  }
+  async write(bytes) {
+    const d = new Proto.Deframer(f => {
+      const crcOk = Proto.crc16(f.subarray(0, f.length - 2)) === (f[f.length - 2] | f[f.length - 1] << 8);
+      if (!crcOk) return;
+      const kind = f[2] === 0x00 ? (f[8] === 0x01 ? "hello" : "state") : (f[3] === 0x00 ? "preset" : "param");
+      if (kind === "hello") this.reply(0x02, [0xb9, 0x02, 0x02, 0x0b]);
+      if (kind === "state") {
+        const body = new Array(40).fill(0);
+        const L = body.length; body[L - 18] = 4; body[L - 16] = 9; body[L - 14] = 12; body[L - 11] = 0;
+        this.reply(0x0306, body);
+      }
+      if (kind === "preset") {
+        const name = new TextEncoder().encode("Demo Clean Plexi");
+        const nameBytes = new Array(33).fill(0); name.forEach((b, i) => nameBytes[i] = b);
+        const body = [0xB9, 0x03, 0x00, 0x00, 0xB9, 0x04, 0xB9, 0x02, 0xBC, 0x21, ...nameBytes, 0xBA, 0x01, 0x88, 0, 0, 0, 0,
+          0xBA, 0x03, 0xBA, PARAM_COUNT];
+        for (const v of this.values) body.push(0x88, ...Proto.floatBytes(v));
+        this.reply(0x0304, body);
+      }
+      if (kind === "param") {
+        const idx = f[15];
+        this.values[idx] = new DataView(f.buffer, f.byteOffset + 17, 4).getFloat32(0, true);
+      }
+    });
+    d.push(bytes);
+  }
+  async close() {}
+}
+
+/* =====================================================================
+   4. APP STATE + PEDAL CONVERSATION
+   ===================================================================== */
+const state = {
+  transport: null,
+  connected: false,
+  preset: null,          // preset number 0..19
+  slot: null,
+  name: "",
+  values: null,          // 109 numbers for the current preset
+  originals: {},         // first values seen for each preset this session (for "Undo my changes")
+  dragging: null,        // param index currently under a finger
+  lastLocalEdit: 0,
+};
+
+const $ = (id) => document.getElementById(id);
+const logLines = [];
+function log(text) {
+  const t = new Date().toTimeString().slice(0, 8);
+  logLines.push(`${t}  ${text}`);
+  if (logLines.length > 300) logLines.shift();
+  const el = $("log"); if (el) el.textContent = logLines.join("\n");
+}
+const hex = (bytes, max = 48) => Array.from(bytes.subarray(0, max), b => b.toString(16).padStart(2, "0")).join(" ") + (bytes.length > max ? " …" : "");
+
+function setStatus(text, kind) {
+  $("statusText").textContent = text;
+  $("status").className = "status " + (kind || "");
+}
+
+// All writes go through one queue so messages never overlap
+let writeChain = Promise.resolve();
+function send(bytes, label) {
+  writeChain = writeChain.then(async () => {
+    if (!state.transport) return;
+    try { await state.transport.write(bytes); }
+    catch (e) { log(`Write failed (${label}): ${e.message}`); }
+  });
+  return writeChain;
+}
+
+let helloTimer = null;
+function onFrame(raw) {
+  const msg = Proto.decode(raw);
+  if (msg.error) { log(`Ignored a message: ${msg.error} [${hex(raw)}]`); return; }
+  if (!msg.sizeOk) log(`Note: size field ${msg.size} vs body ${msg.body.length} (type 0x${msg.type.toString(16)})`);
+
+  switch (msg.type) {
+    case Proto.TYPE.HELLO:
+      log("Pedal said hello");
+      clearTimeout(helloTimer);
+      send(Proto.requestState(), "request state");
+      break;
+
+    case Proto.TYPE.STATE:
+      if (msg.preset === undefined) { log("State message too short to read"); break; }
+      log(`State: slots A=${msg.slots[0] + 1} B=${msg.slots[1] + 1} C=${msg.slots[2] + 1}, active ${"ABC"[Math.min(msg.slot, 2)]}`);
+      state.slot = msg.slot;
+      // the pedal sends state when a footswitch changes preset; read the (new) current preset
+      send(Proto.requestPreset(msg.preset), "request preset");
+      state.preset = msg.preset;
+      break;
+
+    case Proto.TYPE.PRESET:
+      if (!msg.values) { log(`Preset message received but parameters not found [${hex(msg.body)}]`); break; }
+      state.name = msg.name || "";
+      state.values = msg.values;
+      if (!state.originals[state.preset]) state.originals[state.preset] = msg.values.slice();
+      log(`Preset ${state.preset + 1} "${state.name}" read (${msg.values.length} parameters)`);
+      setStatus("Connected", "on");
+      renderAll();
+      break;
+
+    case Proto.TYPE.PARAM:
+      if (msg.paramIndex !== undefined && state.values && msg.paramIndex < PARAM_COUNT) {
+        // a knob turned on the pedal (or the pedal confirming ours)
+        if (state.dragging !== msg.paramIndex && Date.now() - state.lastLocalEdit > 600) {
+          state.values[msg.paramIndex] = msg.paramValue;
+          renderValue(msg.paramIndex);
+        }
+      }
+      break;
+
+    case Proto.TYPE.PRESET_FULL:
+      break;
+
+    default:
+      log(`Other message type 0x${msg.type.toString(16)} (${msg.body.length} bytes)`);
+  }
+}
+
+async function startSession(transport) {
+  await stopSession(true);
+  state.transport = transport;
+  const deframer = new Proto.Deframer(onFrame);
+  setStatus("Connecting…", "busy");
+  try {
+    await transport.open(bytes => deframer.push(bytes), (err) => {
+      log("Connection lost: " + (err && err.message));
+      stopSession();
+    });
+  } catch (e) {
+    log("Couldn't open the pedal: " + e.message);
+    setStatus("Couldn't connect", "");
+    explainOpenError(e);
+    state.transport = null;
+    return;
+  }
+  state.connected = true;
+  $("connectHelp").classList.add("hidden");
+  log("Connected. Saying hello…");
+  send(Proto.hello(), "hello");
+  // if the pedal doesn't answer hello, ask for its state anyway
+  helloTimer = setTimeout(() => { log("No hello reply — asking for state anyway"); send(Proto.requestState(), "request state"); }, 1200);
+}
+
+async function stopSession(quiet) {
+  clearTimeout(helloTimer);
+  if (state.transport) { const t = state.transport; state.transport = null; await t.close(); }
+  state.connected = false; state.values = null;
+  if (!quiet) {
+    setStatus("Not connected", "");
+    $("connectHelp").classList.remove("hidden");
+    renderAll();
+  }
+}
+
+function explainOpenError(e) {
+  const m = (e && e.message) || "";
+  let tip = "";
+  if (/claim|busy|Unable to claim|access/i.test(m))
+    tip = "The phone's system may be holding the pedal's USB connection. Unplug, close other music/USB apps, plug back in and try again. If it keeps happening, copy the log and send it over.";
+  else if (/No device selected/i.test(m))
+    tip = "No pedal was picked in the list.";
+  if (tip) log("Tip: " + tip);
+  if (tip) alert(tip);
+}
+
+async function connect() {
+  if (location.search.includes("demo")) return startSession(new DemoTransport());
+  if (window.AndroidUsb) return startSession(new AndroidTransport());
+  const preferUsb = /Android/i.test(navigator.userAgent) || !("serial" in navigator);
+  try {
+    if (preferUsb && "usb" in navigator) {
+      const dev = await navigator.usb.requestDevice({ filters: [{ vendorId: VENDOR_ID }] });
+      log(`Picked ${dev.productName || "device"} (${dev.vendorId.toString(16)}:${dev.productId.toString(16)})`);
+      if (dev.productId !== TONEX_ONE_PID) log("Warning: this isn't the ToneX One's usual product ID. It may not work.");
+      await startSession(new UsbTransport(dev));
+    } else if ("serial" in navigator) {
+      const port = await navigator.serial.requestPort({ filters: [{ usbVendorId: VENDOR_ID }] });
+      await startSession(new SerialTransport(port));
+    }
+  } catch (e) {
+    log("Connect cancelled or failed: " + e.message);
+    explainOpenError(e);
+  }
+}
+
+// Reconnect automatically to a pedal this phone has already allowed
+async function autoConnect() {
+  if (location.search.includes("demo") || state.transport) return;
+  if (window.AndroidUsb) {
+    if (window.AndroidUsb.hasPedal()) { log("Pedal detected — connecting"); startSession(new AndroidTransport()); }
+    return;
+  }
+  if (!("usb" in navigator)) return;
+  const preferUsb = /Android/i.test(navigator.userAgent) || !("serial" in navigator);
+  if (!preferUsb) return;
+  const devs = await navigator.usb.getDevices();
+  const dev = devs.find(d => d.vendorId === VENDOR_ID);
+  if (dev && !state.connected) { log("Found a pedal you've used before — connecting"); startSession(new UsbTransport(dev)); }
+}
+
+/* =====================================================================
+   5. EDITING: throttled sends while dragging
+   ===================================================================== */
+const pending = new Map();
+let flushTimer = null;
+function setParam(index, value) {
+  if (!state.values) return;
+  state.values[index] = value;
+  state.lastLocalEdit = Date.now();
+  pending.set(index, value);
+  if (!flushTimer) flushTimer = setTimeout(flush, 35);
+  updateRevertButton();
+}
+function flush() {
+  flushTimer = null;
+  for (const [i, v] of pending) send(Proto.setParam(i, v), `param ${i}`);
+  pending.clear();
+}
+
+async function revert() {
+  const orig = state.originals[state.preset];
+  if (!orig || !state.values) return;
+  let n = 0;
+  for (let i = 0; i < PARAM_COUNT; i++) {
+    if (Math.abs(orig[i] - state.values[i]) > 1e-6) { await send(Proto.setParam(i, orig[i]), `revert ${i}`); state.values[i] = orig[i]; n++; }
+  }
+  log(`Undo: put back ${n} setting(s)`);
+  renderAll();
+}
+
+function changedCount() {
+  const orig = state.originals[state.preset];
+  if (!orig || !state.values) return 0;
+  let n = 0;
+  for (let i = 0; i < PARAM_COUNT; i++) if (Math.abs(orig[i] - state.values[i]) > 1e-6) n++;
+  return n;
+}
+function updateRevertButton() {
+  const n = changedCount();
+  $("revertBtn").disabled = n === 0;
+  $("revertBtn").textContent = n ? `Undo changes (${n})` : "Undo changes";
+}
+
+/* =====================================================================
+   6. UI
+   ===================================================================== */
+const binders = {};   // param index -> list of functions that redraw it
+function bind(index, fn) { (binders[index] = binders[index] || []).push(fn); }
+function renderValue(index) { (binders[index] || []).forEach(fn => fn(state.values ? state.values[index] : null)); }
+function renderAll() {
+  const ready = !!state.values;
+  $("app").classList.toggle("locked", !ready);
+  $("refreshBtn").disabled = !state.connected;
+  $("presetNum").textContent = ready ? String(state.preset + 1) : "–";
+  $("presetName").textContent = ready ? (state.name || "(no name)") : (state.connected ? "Reading pedal…" : "No preset loaded");
+  $("presetSub").textContent = ready
+    ? `Slot ${"ABC"[Math.min(state.slot ?? 0, 2)]} · changes go to the pedal instantly and the pedal keeps them`
+    : "Changes go to the pedal instantly and the pedal keeps them.";
+  for (const i of Object.keys(binders)) renderValue(Number(i));
+  updateRevertButton();
+}
+
+const isOn = (v) => v !== null && v >= 0.5;
+const decimals = (step) => (String(step).split(".")[1] || "").length;
+
+function makeToggle(index, label, cls) {
+  const b = document.createElement("button");
+  b.className = cls; b.textContent = label;
+  b.addEventListener("click", () => {
+    if (!state.values) return;
+    setParam(index, isOn(state.values[index]) ? 0 : 1);
+    renderValue(index);
+  });
+  bind(index, (v) => { b.classList.toggle("on", isOn(v)); b.setAttribute("aria-pressed", isOn(v)); });
+  return b;
+}
+
+function makeSlider([index, label, min, max, step, unit]) {
+  const wrap = document.createElement("div");
+  wrap.className = "param";
+  const dp = decimals(step);
+  const fmt = (v) => v === null ? "–" : (Number(v).toFixed(dp) + (unit ? " " + unit : ""));
+  wrap.innerHTML = `
+    <div class="param-top"><span class="param-label"></span><span class="param-val">–</span></div>
+    <div class="param-row">
+      <button class="step" aria-label="Less">−</button>
+      <input type="range">
+      <button class="step" aria-label="More">+</button>
+    </div>`;
+  wrap.querySelector(".param-label").textContent = label;
+  const valEl = wrap.querySelector(".param-val");
+  const range = wrap.querySelector("input");
+  const [minus, plus] = wrap.querySelectorAll(".step");
+  Object.assign(range, { min, max, step });
+
+  const apply = (v) => {
+    v = Math.round(v / step) * step;
+    v = Number(v.toFixed(dp + 2));
+    setParam(index, v);
+    valEl.textContent = fmt(v);
+  };
+  range.addEventListener("input", () => apply(parseFloat(range.value)));
+  range.addEventListener("pointerdown", () => state.dragging = index);
+  range.addEventListener("pointerup", () => state.dragging = null);
+  range.addEventListener("pointercancel", () => state.dragging = null);
+  const nudge = (dir) => {
+    if (!state.values) return;
+    let v = state.values[index] + dir * step;
+    v = Math.min(Math.max(v, Number(range.min)), Number(range.max));
+    apply(v); range.value = v;
+  };
+  minus.addEventListener("click", () => nudge(-1));
+  plus.addEventListener("click", () => nudge(1));
+
+  bind(index, (v) => {
+    valEl.textContent = fmt(v);
+    if (v === null) return;
+    // If the pedal holds a value outside the range we expect, widen the slider instead of clamping it
+    if (v < Number(range.min)) range.min = v;
+    if (v > Number(range.max)) range.max = v;
+    if (state.dragging !== index) range.value = v;
+  });
+  return wrap;
+}
+
+function buildUI() {
+  const tg = $("toggles");
+  for (const [i, label] of BLOCK_TOGGLES) tg.appendChild(makeToggle(i, label, "tog"));
+
+  const host = $("sections");
+  for (const sec of SECTIONS) {
+    const card = document.createElement("section");
+    card.className = "card editable";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.innerHTML = `<h2></h2>`;
+    head.querySelector("h2").textContent = sec.title;
+    if (sec.toggle !== undefined) {
+      head.appendChild(makeToggle(sec.toggle, "ON", "mini-tog"));
+      bind(sec.toggle, (v) => {
+        card.classList.toggle("block-off", v !== null && !isOn(v));
+        head.querySelector(".mini-tog").textContent = isOn(v) ? "ON" : "OFF";
+      });
+    }
+    card.appendChild(head);
+
+    for (const s of sec.sliders || []) card.appendChild(makeSlider(s));
+
+    if (sec.advanced) {
+      const det = document.createElement("details");
+      det.className = "adv";
+      det.innerHTML = "<summary>Advanced: frequencies and Q</summary>";
+      for (const s of sec.advanced) det.appendChild(makeSlider(s));
+      card.appendChild(det);
+    }
+
+    if (sec.reverb) {
+      const models = document.createElement("div");
+      models.className = "models";
+      const groups = [];
+      REVERB_MODELS.forEach((name, m) => {
+        const b = document.createElement("button");
+        b.className = "model"; b.textContent = name;
+        b.addEventListener("click", () => { setParam(P.REVERB_MODEL, m); renderValue(P.REVERB_MODEL); });
+        models.appendChild(b);
+        const g = document.createElement("div");
+        g.appendChild(makeSlider([reverbParam(m, 3), "Mix", 0, 100, 1, "%"]));
+        g.appendChild(makeSlider([reverbParam(m, 0), "Time", 0, 10, 0.1, ""]));
+        g.appendChild(makeSlider([reverbParam(m, 1), "Pre-delay", 0, 500, 1, "ms"]));
+        g.appendChild(makeSlider([reverbParam(m, 2), "Colour", -10, 10, 0.1, ""]));
+        groups.push(g);
+      });
+      card.appendChild(models);
+      groups.forEach(g => card.appendChild(g));
+      bind(P.REVERB_MODEL, (v) => {
+        const m = v === null ? -1 : Math.round(v);
+        models.querySelectorAll(".model").forEach((b, i) => b.classList.toggle("on", i === m));
+        groups.forEach((g, i) => g.classList.toggle("hidden", i !== (m < 0 ? 0 : m)));
+      });
+    }
+    host.appendChild(card);
+  }
+}
+
+/* =====================================================================
+   7. START
+   ===================================================================== */
+buildUI();
+renderAll();
+
+const supported = !!window.AndroidUsb || ("usb" in navigator) || ("serial" in navigator) || location.search.includes("demo");
+if (!supported) { $("noSupport").classList.remove("hidden"); $("connectBtn").disabled = true; }
+if (location.search.includes("demo")) $("connectBtn").textContent = "Connect (demo pedal)";
+
+$("connectBtn").addEventListener("click", connect);
+$("refreshBtn").addEventListener("click", () => { log("Re-reading pedal"); send(Proto.requestState(), "request state"); });
+$("revertBtn").addEventListener("click", () => { if (confirm("Put this preset back to how it was when the app first read it?")) revert(); });
+$("disconnectBtn").addEventListener("click", () => stopSession());
+$("copyLogBtn").addEventListener("click", async () => {
+  const text = logLines.join("\n");
+  try { await navigator.clipboard.writeText(text); $("copyLogBtn").textContent = "Copied ✓"; }
+  catch (e) {
+    // fallback for the Android app's web view
+    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+    $("copyLogBtn").textContent = document.execCommand("copy") ? "Copied ✓" : "Copy failed";
+    ta.remove();
+  }
+  setTimeout(() => $("copyLogBtn").textContent = "Copy log", 1500);
+});
+
+if (window.AndroidUsb) {
+  log(`Ready (Android app ${window.AndroidUsb.version()}).`);
+  autoConnect();
+} else if ("usb" in navigator) {
+  navigator.usb.addEventListener("connect", () => autoConnect());
+  navigator.usb.addEventListener("disconnect", (e) => {
+    if (state.transport instanceof UsbTransport && state.transport.device === e.device) { log("Pedal unplugged"); stopSession(); }
+  });
+  autoConnect();
+}
+if (!window.AndroidUsb) log(`Ready. ${"usb" in navigator ? "WebUSB available. " : ""}${"serial" in navigator ? "Web Serial available. " : ""}`);
+</script>
+</body>
+</html>
